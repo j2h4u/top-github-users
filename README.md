@@ -14,6 +14,8 @@ collection time; historical profile settings are unavailable.
 Each completed collection creates one report with both tables under `results/`.
 The authoritative data remains in the private SQLite database.
 
+Latest report: [2025-10-16 through 2026-10-16](results/2025-10-16T000000Z--2026-10-16T000000Z/contributions.md).
+
 ## Collect locally
 
 Python 3.12 or later on Linux, with an authenticated GitHub CLI:
