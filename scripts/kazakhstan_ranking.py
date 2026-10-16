@@ -301,7 +301,9 @@ def collect_profiles():
             for user in data['nodes']:
                 if not user.get('id') or not user.get('login'):
                     raise RuntimeError('User search returned an account without identity')
-                users[user['id']] = user
+                if not any(fragment.lower() in (user.get('location') or '').lower()
+                           for fragment in country.get('excludedLocationFragments', [])):
+                    users[user['id']] = user
             print(f'Fetched {len(users)} users', flush=True)
             if not data['pageInfo']['hasNextPage']:
                 return

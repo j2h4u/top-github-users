@@ -80,6 +80,18 @@ class SearchTest(unittest.TestCase):
         self.assertTrue(any('location:"nur sultan"' in q for q in searches))
         self.assertTrue(all(q.count('location:') <= 12 for q in searches))
 
+    def test_known_foreign_locations_are_excluded(self):
+        Path('config.json').write_text(json.dumps({'locations': [{'country': 'Kazakhstan', 'cities': ['Petropavlovsk'],
+            'excludedLocationFragments': ['kamchat', 'камчат', 'oral drug']}]}))
+        profiles = [{'id': f'ID-{i}', 'login': f'u{i}', 'location': location, 'followers': {'totalCount': 1}}
+                    for i, location in enumerate(['Petropavlovsk', 'Petropavlovsk-Kamchatsky',
+                                                  'Петропавловск-Камчатский', 'Oral Drug Delivery'])]
+        replies = [{'search': {'nodes': profiles[:1]}},
+                   {'search': {'userCount': 4, 'nodes': profiles, 'pageInfo': {'hasNextPage': False}}}]
+        with patch.object(ranking, 'api', side_effect=replies), patch('builtins.print'):
+            users, _ = ranking.collect_profiles()
+        self.assertEqual([u['id'] for u in users], ['ID-0'])
+
     def test_missing_repeated_and_cyclic_cursors_fail(self):
         for cursors in ([None], ['same', 'same'], ['a', 'b', 'a']):
             replies = [{'search': {'nodes': [{'followers': {'totalCount': 1}}]}}]

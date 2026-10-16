@@ -115,6 +115,11 @@
         "kapshagay",
         "қапшағай",
         "капчагай"
+      ],
+      "excludedLocationFragments": [
+        "kamchat",
+        "камчат",
+        "oral drug"
       ]
     }
   ]
