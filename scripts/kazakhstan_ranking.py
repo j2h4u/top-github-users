@@ -1,9 +1,10 @@
 """Fixed-period public contribution ranking, using only Python's standard library."""
 import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
+from email.utils import parsedate_to_datetime
 import json
 import os
-import threading
+import tempfile
 from pathlib import Path
 import time
 import urllib.error
@@ -16,47 +17,148 @@ contributionsCollection(from: $from, to: $to) {
   contributionCalendar { totalContributions }
   restrictedContributionsCount
 }'''
-REQUEST_LOCK = threading.Lock()
 NEXT_REQUEST_AT = 0.0
 
 
+def cache_path(key):
+    # Separate credentials can see different restricted contribution counts.
+    scope = hashlib.sha256(os.environ['GH_TOKEN'].encode()).hexdigest()
+    digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
+    return Path('cache/api') / scope / (digest + '.json')
+
+
+def contribution_ttl(period):
+    historical = datetime.datetime.fromisoformat(period['to']) < datetime.datetime.now(datetime.timezone.utc)
+    return None if historical else 3600
+
+
+def read_cache(path, ttl):
+    if os.environ.get('REFRESH_CACHE', 'false').lower() != 'true' and path.exists():
+        try:
+            if ttl is None or 0 <= time.time() - path.stat().st_mtime < ttl:
+                return json.loads(path.read_text())
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def write_cache(path, data):
+    directory = path.parent
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=directory, delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(data, output)
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def api(query, variables):
+    path = cache_path([query, variables])
+    ttl = contribution_ttl(variables) if 'from' in variables else 86400
+    data = read_cache(path, ttl)
+    if data is None:
+        data = fetch_api(query, variables)
+        write_cache(path, data)
+    return data
+
+
+def fetch_users(logins, period):
+    users, missing = {}, []
+    for login in logins:
+        user = read_cache(cache_path(['user-v1', login.lower(), period]), contribution_ttl(period))
+        if user is None:
+            missing.append(login)
+        else:
+            users[login.lower()] = user
+    if not missing:
+        return users
+    fields = '\n'.join(f'u{i}: user(login: {json.dumps(login)}) {{ {FIELDS} }}'
+                       for i, login in enumerate(missing))
+    try:
+        data = api('query($from: DateTime!, $to: DateTime!) { ' + fields + ' }', period)
+    except RuntimeError as error:
+        if 'RESOURCE_LIMITS_EXCEEDED' not in str(error) or len(missing) == 1:
+            raise
+        middle = len(missing) // 2
+        users.update(fetch_users(missing[:middle], period))
+        users.update(fetch_users(missing[middle:], period))
+        return users
+    for user in data.values():
+        if user:
+            login = user['login'].lower()
+            write_cache(cache_path(['user-v1', login, period]), user)
+            users[login] = user
+    return users
+
+
+def retry_delay(headers, attempt, limited):
+    delay = None
+    if headers.get('Retry-After') is not None:
+        try:
+            delay = max(0, float(headers['Retry-After']))
+        except ValueError:
+            try:
+                delay = max(0, parsedate_to_datetime(headers['Retry-After']).timestamp() - time.time())
+            except (ValueError, TypeError, OverflowError):
+                pass
+    if headers.get('x-ratelimit-remaining') == '0':
+        try:
+            delay = max(delay or 0, float(headers['x-ratelimit-reset']) - time.time() + 1)
+        except (KeyError, ValueError):
+            pass
+    return max(0, delay) if delay is not None else (60 if limited else 2) * 2 ** attempt
+
+
+def fetch_api(query, variables):
     global NEXT_REQUEST_AT
     request = urllib.request.Request('https://api.github.com/graphql',
         json.dumps({'query': query, 'variables': variables}).encode(),
         {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
          'Content-Type': 'application/json', 'User-Agent': 'kazakhstan-ranking'})
     for attempt in range(5):
-        with REQUEST_LOCK:
-            time.sleep(max(0, NEXT_REQUEST_AT - time.monotonic()))
-            NEXT_REQUEST_AT = time.monotonic() + 3
+        wait = NEXT_REQUEST_AT - time.time()
+        if wait > 0:
+            print(f'GitHub retry/limit; waiting {wait:.1f}s', flush=True)
+            time.sleep(wait)
+        NEXT_REQUEST_AT = 0.0
+        limited, headers = False, {}
         try:
             with urllib.request.urlopen(request, timeout=90) as response:
+                headers = response.headers
                 result = json.load(response)
+            if headers.get('x-ratelimit-remaining') == '0':
+                NEXT_REQUEST_AT = time.time() + retry_delay(headers, attempt, True)
             if result.get('errors'):
                 message = json.dumps(result['errors'])
-                if 'timeout' in message.lower() or 'something went wrong' in message.lower():
-                    raise TimeoutError(message)
-                raise RuntimeError(message)
-            return result['data']
+                limited = any(e.get('type') == 'RATE_LIMITED' for e in result['errors']) or 'rate limit' in message.lower()
+                if not limited:
+                    if 'timeout' in message.lower() or 'something went wrong' in message.lower():
+                        raise TimeoutError(message)
+                    raise RuntimeError(message)
+            else:
+                if not isinstance(result.get('data'), dict):
+                    raise RuntimeError('GitHub returned no data object')
+                return result['data']
         except urllib.error.HTTPError as error:
+            headers = error.headers or {}
             if error.code in (403, 429):
                 body = error.read().decode('utf-8', errors='replace')
-                if error.code == 403 and not any(term in body.lower() for term in ('rate limit', 'abuse', 'temporarily')):
+                limited = (error.code == 429 or headers.get('Retry-After') is not None
+                           or headers.get('x-ratelimit-remaining') == '0'
+                           or any(term in body.lower() for term in ('rate limit', 'abuse', 'temporarily')))
+                if not limited:
                     raise RuntimeError(f'GitHub HTTP 403: {body}') from error
-                delay = max(60 * (attempt + 1), int(error.headers.get('Retry-After', '0')))
-                with REQUEST_LOCK:
-                    NEXT_REQUEST_AT = max(NEXT_REQUEST_AT, time.monotonic() + delay)
-                print(f'GitHub temporary request limit; pausing {delay}s', flush=True)
-                if attempt == 4:
-                    raise RuntimeError(f'GitHub request limit persists: {body}') from error
-                continue
-            if error.code not in (429, 500, 502, 503, 504) or attempt == 4:
+            elif error.code not in (500, 502, 503, 504):
                 raise
         except (urllib.error.URLError, TimeoutError):
-            if attempt == 4:
-                raise
-        time.sleep(3 * (attempt + 1))
+            pass
+        if attempt == 4:
+            raise RuntimeError('GitHub request failed after five attempts')
+        NEXT_REQUEST_AT = max(NEXT_REQUEST_AT, time.time() + retry_delay(headers, attempt, limited))
 
 
 def main():
@@ -103,7 +205,6 @@ def main():
             if not data['pageInfo']['hasNextPage']:
                 return
             cursor = data['pageInfo']['endCursor']
-            time.sleep(1)
 
     maximum = api('''query($q: String!) {
       search(type: USER, query: $q, first: 1) {
@@ -133,30 +234,15 @@ def main():
     logins = [user['login'] for user in users.values()]
     if not found:
         logins.append('PhysShell')
-    users = {}
+    profiles, users = users, {}
 
     def fetch_batch(batch):
-        fields = '\n'.join(f'u{i}: user(login: {json.dumps(login)}) {{ {FIELDS} }}'
-                           for i, login in enumerate(batch))
-        try:
-            data = api('query($from: DateTime!, $to: DateTime!) { ' + fields + ' }', period)
-        except RuntimeError as error:
-            if 'RESOURCE_LIMITS_EXCEEDED' not in str(error) or len(batch) == 1:
-                raise
-            middle = len(batch) // 2
-            fetch_batch(batch[:middle])
-            fetch_batch(batch[middle:])
-            return
-        for user in data.values():
-            if user:
-                users[user['login'].lower()] = user
+        for login, user in fetch_users(batch, period).items():
+            users[login] = {**user, **profiles.get(login, {})}
         print(f'Contributions fetched: {len(users)}/{len(logins)}', flush=True)
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [executor.submit(fetch_batch, logins[start:start + 20])
-                   for start in range(0, len(logins), 20)]
-        for future in as_completed(futures):
-            future.result()
+    for start in range(0, len(logins), 20):
+        fetch_batch(logins[start:start + 20])
     target = users.get('physshell')
     if not target:
         raise RuntimeError('PhysShell missing')
