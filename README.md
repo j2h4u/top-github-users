@@ -38,6 +38,8 @@ To expand location coverage for an existing period without updating its saved
 counts, add `--expand` to the collection command. Existing snapshot counts are
 retained regardless of age; new accounts are fetched normally. Omit `--expand`
 when you want the normal freshness policy.
+Reports retain the incomplete-day warning until all used counts were acquired
+after the final UTC day ended, even when the report is rebuilt later.
 
 All searches use `type:user` and split by followers/account creation dates to
 get past GitHub's 1,000-result cap. There is no truncated selection mode or

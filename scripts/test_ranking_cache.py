@@ -154,6 +154,41 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.DATABASE.stat().st_mode & 0o777, 0o600)
         self.assertEqual(list(Path('results').glob('**/*.json')), [])
 
+    def test_expansion_keeps_provisional_warning_until_final_counts_are_acquired(self):
+        alice, bob = profile(), profile('Bob', 'ID-B')
+        closed_at = datetime.datetime(2026, 9, 18, tzinfo=datetime.timezone.utc).timestamp()
+        with patch.object(store.time, 'time', return_value=closed_at - 600), \
+             patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):
+            original = ranking.fetch_users([alice], PERIOD)
+        store.save_snapshot(self.snapshot(list(original.values())))
+        with closing(store.connect()) as connection:
+            before = connection.execute('SELECT id,total,restricted,fetched_at FROM observations').fetchone()
+        with patch.object(store.time, 'time', return_value=closed_at + 60), \
+             patch.object(ranking, 'collect_profiles', return_value=([alice, bob], [])), \
+             patch.object(ranking, 'fetch_api', return_value={'u0': api_user(bob, 20, 4)}) as fetch, \
+             patch('builtins.print'):
+            ranking.collect_ranking(PERIOD, expand=True)
+        self.assertEqual(fetch.call_count, 1)
+        self.assertNotIn('ID-A', fetch.call_args.args[0])
+        saved = store.load_snapshots()[0]
+        self.assertTrue(saved['countsProvisional'])
+        with closing(store.connect()) as connection:
+            self.assertEqual(connection.execute('SELECT id,total,restricted,fetched_at FROM observations WHERE user_id=?',
+                                                (alice['id'],)).fetchone(), before)
+        with patch.dict(os.environ, {}, clear=True), patch('sys.argv', ['ranking', '--project']), \
+             patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')), patch('builtins.print'):
+            ranking.main()
+        report = ranking.result_directory(PERIOD) / 'contributions.md'
+        self.assertIn('Some counts were collected before', report.read_text())
+        with patch.object(store.time, 'time', return_value=closed_at), \
+             patch.dict(os.environ, {'REFRESH_CACHE': 'true'}), \
+             patch.object(ranking, 'collect_profiles', return_value=([alice, bob], [])), \
+             patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice, 14, 4), 'u1': api_user(bob, 20, 4)}), \
+             patch('builtins.print'):
+            ranking.collect_ranking(PERIOD)
+        self.assertFalse(store.load_snapshots()[0]['countsProvisional'])
+        self.assertNotIn('Some counts were collected before', report.read_text())
+
     def test_refresh_preserves_ready_snapshot_then_removes_old_observation(self):
         alice = profile()
         with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):
@@ -185,17 +220,19 @@ class StoreTest(unittest.TestCase):
 
     def test_atomic_projector_two_rankings_ties_and_policy(self):
         metadata = {**PERIOD, 'generatedAt': '2026-09-18T12:00:00Z', 'selectionMode': 'full-location-search',
-                    'observerPolicy': 'authenticated-viewer', 'periodSemantics': 'inclusive-UTC-calendar-dates', 'users': [
+                    'observerPolicy': 'authenticated-viewer', 'periodSemantics': 'inclusive-UTC-calendar-dates',
+                    'countsProvisional': False, 'users': [
             {'login': 'A', 'followers': 1, 'totalContributions': 9, 'restrictedContributionsCount': 0},
             {'login': 'B', 'followers': 0, 'totalContributions': 25, 'restrictedContributionsCount': 20},
             {'login': 'C', 'followers': 2, 'totalContributions': 10, 'restrictedContributionsCount': 1}]}
         path = ranking.render_rankings(metadata)
-        self.assertNotIn('The final day was still in progress', path.read_text())
+        self.assertNotIn('Some counts were collected before', path.read_text())
         metadata['generatedAt'] = '2026-09-17T12:00:00Z'
+        metadata['countsProvisional'] = True
         path = ranking.render_rankings(metadata)
         old = path.read_bytes()
         text = old.decode()
-        self.assertIn('The final day was still in progress', text)
+        self.assertIn('Some counts were collected before', text)
         visible, total = text.split('## Total')
         self.assertIn('## Visible to acquisition viewer', visible)
         self.assertNotIn('## Public', text)

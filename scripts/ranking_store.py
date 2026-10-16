@@ -125,16 +125,20 @@ def load_snapshots():
         result = []
         for identifier, start, end, generated, extra in connection.execute('SELECT * FROM snapshots ORDER BY period_from, period_to'):
             users, missing, unavailable = [], [], []
-            for login, profile, status, total, restricted, user_id in connection.execute('''
-                SELECT m.login, m.profile, m.status, o.total, o.restricted, o.user_id
+            provisional = False
+            closed_at = (datetime.datetime.fromisoformat(end) + datetime.timedelta(days=1)).timestamp()
+            for login, profile, status, total, restricted, user_id, fetched_at in connection.execute('''
+                SELECT m.login, m.profile, m.status, o.total, o.restricted, o.user_id, o.fetched_at
                 FROM members m LEFT JOIN observations o ON o.id=m.observation_id
                 WHERE m.snapshot_id=? ORDER BY m.position''', (identifier,)):
                 if status == 'unavailable':
                     missing.append(login)
                     unavailable.append({'login': login, **json.loads(profile)})
                 else:
+                    provisional |= fetched_at < closed_at
                     users.append({'login': login, 'id': user_id, **json.loads(profile), 'totalContributions': total, 'restrictedContributionsCount': restricted})
-            metadata = {**json.loads(extra), 'from': start, 'to': end, 'generatedAt': generated, 'users': users}
+            metadata = {**json.loads(extra), 'from': start, 'to': end, 'generatedAt': generated,
+                        'users': users, 'countsProvisional': provisional}
             if missing:
                 metadata['missingUsers'] = missing
             if unavailable:

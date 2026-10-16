@@ -184,16 +184,14 @@ def render_rankings(metadata):
     for user in metadata['users']:
         store.validate_counts(user['totalContributions'], user['restrictedContributionsCount'])
     label = 'Visible to acquisition viewer'
-    final_day_open = (datetime.datetime.fromisoformat(metadata['to']).date()
-                      >= datetime.datetime.fromisoformat(metadata['generatedAt']).date())
     lines = ['# Kazakhstan contribution rankings', '',
         f'Period: `{metadata["from"]}` → `{metadata["to"]}`.',
         f'Snapshot completed: `{metadata["generatedAt"]}`.',
         f'Accounts fetched: **{len(metadata["users"])}**.',
         f'Selection mode: `{metadata["selectionMode"]}`.',
         f'Observer policy: `{metadata["observerPolicy"]}`.',
-        'Both UTC dates are included.' + (' The final day was still in progress when this snapshot completed.'
-                                        if final_day_open else ''),
+        'Both UTC dates are included.' + (' Some counts were collected before the final UTC day ended and may be incomplete.'
+                                        if metadata['countsProvisional'] else ''),
         'Counts reflect their individual acquisition times.',
         f'Unavailable accounts: {len(metadata.get("missingUsers", []))}; snapshot ' +
             ('incomplete.' if metadata.get('missingUsers') else 'complete.'), '',

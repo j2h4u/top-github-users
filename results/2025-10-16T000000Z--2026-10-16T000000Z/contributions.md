@@ -5,7 +5,7 @@ Snapshot completed: `2026-10-16T21:09:48.383511+00:00`.
 Accounts fetched: **17878**.
 Selection mode: `full-location-search`.
 Observer policy: `authenticated-viewer`.
-Both UTC dates are included. The final day was still in progress when this snapshot completed.
+Both UTC dates are included. Some counts were collected before the final UTC day ended and may be incomplete.
 Counts reflect their individual acquisition times.
 Unavailable accounts: 0; snapshot complete.
 
