@@ -20,7 +20,7 @@ def connect():
         CREATE TABLE IF NOT EXISTS responses (
             key TEXT PRIMARY KEY, fetched_at REAL NOT NULL, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS observations (
-            id INTEGER PRIMARY KEY, scope TEXT NOT NULL, user_id TEXT, login TEXT NOT NULL,
+            id INTEGER PRIMARY KEY, scope TEXT NOT NULL, user_id TEXT NOT NULL, login TEXT NOT NULL,
             period_from TEXT NOT NULL, period_to TEXT NOT NULL, fetched_at REAL NOT NULL,
             total INTEGER NOT NULL CHECK(total >= 0),
             restricted INTEGER NOT NULL CHECK(restricted BETWEEN 0 AND total));
@@ -67,7 +67,7 @@ def cached_observations(scope, profiles, period, ttl, refresh=False):
         return {}
     with closing(connect()) as connection:
         rows = connection.execute('''SELECT id, user_id, fetched_at, total, restricted
-            FROM observations WHERE scope=? AND period_from=? AND period_to=? AND user_id IS NOT NULL
+            FROM observations WHERE scope=? AND period_from=? AND period_to=?
             ORDER BY fetched_at, id''', (scope, period['from'], period['to'])).fetchall()
     by_id = {user_id: (identifier, total, restricted) for identifier, user_id, fetched, total, restricted in rows
              if ttl is None or 0 <= time.time() - fetched < ttl}
@@ -91,12 +91,12 @@ def save_snapshot(metadata):
                 FROM observations WHERE id=?''', (user['_observation'],)).fetchone()
             if observation is None or observation[:4] != (user['totalContributions'], user['restrictedContributionsCount'], metadata['from'], metadata['to']):
                 raise ValueError('Snapshot does not match its saved observation')
-            if user.get('id') != observation[4]:
+            if user['id'] != observation[4]:
                 raise ValueError('Snapshot identity does not match its saved observation')
             profile = {k: v for k, v in user.items() if k not in ('_observation', 'totalContributions', 'restrictedContributionsCount', 'login', 'id')}
             connection.execute('INSERT INTO members VALUES (?, ?, ?, ?, ?, ?)',
                                (snapshot, position, user['login'], json.dumps(profile, ensure_ascii=False), user['_observation'], 'ok'))
-        unavailable = metadata.get('unavailableUsers', [{'login': login} for login in metadata.get('missingUsers', [])])
+        unavailable = metadata.get('unavailableUsers', [])
         for position, user in enumerate(unavailable, len(users)):
             profile = {k: v for k, v in user.items() if k != 'login'}
             connection.execute('INSERT INTO members VALUES (?, ?, ?, ?, NULL, ?)',
@@ -116,11 +116,9 @@ def load_snapshots():
                 WHERE m.snapshot_id=? ORDER BY m.position''', (identifier,)):
                 if status == 'unavailable':
                     missing.append(login)
-                    if json.loads(profile):
-                        unavailable.append({'login': login, **json.loads(profile)})
+                    unavailable.append({'login': login, **json.loads(profile)})
                 else:
-                    identity = {'id': user_id} if user_id is not None else {}
-                    users.append({'login': login, **identity, **json.loads(profile), 'totalContributions': total, 'restrictedContributionsCount': restricted})
+                    users.append({'login': login, 'id': user_id, **json.loads(profile), 'totalContributions': total, 'restrictedContributionsCount': restricted})
             metadata = {**json.loads(extra), 'from': start, 'to': end, 'generatedAt': generated, 'users': users}
             if missing:
                 metadata['missingUsers'] = missing

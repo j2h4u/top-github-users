@@ -36,6 +36,7 @@ class StoreTest(unittest.TestCase):
 
     def snapshot(self, users, period=None, **extra):
         return {**(period or PERIOD), 'generatedAt': 'saved-time', 'selectionMode': 'full-location-search',
+                'observerPolicy': 'authenticated-viewer', 'periodSemantics': 'inclusive-UTC-calendar-dates',
                 'users': [{**user, 'followers': user['followers']['totalCount']} for user in users], **extra}
 
     def test_period_normalization_inclusive_dates_and_open_day(self):
@@ -118,7 +119,7 @@ class StoreTest(unittest.TestCase):
         alice, bob = profile(), profile('Bob', 'ID-B')
         with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice), 'u1': None}):
             users = ranking.fetch_users([alice, bob], PERIOD)
-        first = self.snapshot(list(users.values()), missingUsers=['Bob'])
+        first = self.snapshot(list(users.values()), unavailableUsers=[bob])
         store.save_snapshot(first)
         before = store.load_snapshots()[0]
         self.assertEqual(before['missingUsers'], ['Bob'])
@@ -150,7 +151,8 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.load_snapshots(), before)
 
     def test_atomic_projector_two_rankings_ties_and_policy(self):
-        metadata = {**PERIOD, 'generatedAt': 'saved-time', 'selectionMode': 'full-location-search', 'users': [
+        metadata = {**PERIOD, 'generatedAt': 'saved-time', 'selectionMode': 'full-location-search',
+                    'observerPolicy': 'authenticated-viewer', 'periodSemantics': 'inclusive-UTC-calendar-dates', 'users': [
             {'login': 'A', 'followers': 1, 'totalContributions': 9, 'restrictedContributionsCount': 0},
             {'login': 'B', 'followers': 0, 'totalContributions': 25, 'restrictedContributionsCount': 20},
             {'login': 'C', 'followers': 2, 'totalContributions': 10, 'restrictedContributionsCount': 1}]}

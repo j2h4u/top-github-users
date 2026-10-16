@@ -11,10 +11,8 @@ unconditionally labelled public. The total cannot include undisclosed activity.
 Neither ranking is a census of Kazakhstan. Locations and followers reflect
 collection time; historical profile settings are unavailable.
 
-Saved reports, each containing both tables:
-
-- [Year ending September 17, 2026](results/2025-09-17T031100Z--2026-09-17T031100Z/contributions.md)
-- [Year ending October 16, 2026](results/2025-10-16T143332Z--2026-10-16T143332Z/contributions.md)
+Each completed collection creates one report with both tables under `results/`.
+The authoritative data remains in the private SQLite database.
 
 ## Collect locally
 
@@ -53,12 +51,10 @@ disposable cache**. It holds observations, snapshot membership and metadata;
 only the two source counters are stored. Snapshots reference observations
 instead of duplicating counts. Search responses expire after one day.
 
-New observations use stable GitHub IDs; renames reuse them, reused logins do
+Observations require stable GitHub IDs; renames reuse them, reused logins do
 not transfer another account's counts. Cache scopes are credential hashes
-because visibility depends on the reader; no token is saved. Migrated results
-retain their original numbers, timestamps, membership and metadata. Their
-missing stable IDs and unspecified observer policy are explicit; they are not
-silently assigned today's account identities or recounted under new semantics.
+because visibility depends on the reader; no token is saved. Old data without
+stable IDs was discarded. There is no legacy import or compatibility mode.
 
 Each period has one `results/<from>--<to>/contributions.md` report containing both
 rankings. Publication is a single atomic replacement after the snapshot commits.

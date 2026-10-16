@@ -188,16 +188,15 @@ def render_rankings(metadata):
         f'Data collected: `{metadata["generatedAt"]}`.',
         f'Accounts fetched: **{len(metadata["users"])}**.',
         f'Selection mode: `{metadata["selectionMode"]}`.',
-        f'Accounts without a recorded stable GitHub ID: {sum(not u.get("id") for u in metadata["users"])}.',
-        f'Observer policy: `{metadata.get("observerPolicy", "legacy-unspecified")}`.',
-        f'Period semantics: `{metadata.get("periodSemantics", "legacy-requested-timestamps; calendar-day precision")}`.',
+        f'Observer policy: `{metadata["observerPolicy"]}`.',
+        f'Period semantics: `{metadata["periodSemantics"]}`.',
         f'Unavailable accounts: {len(metadata.get("missingUsers", []))}; snapshot ' +
             ('incomplete.' if metadata.get('missingUsers') else 'complete.'), '',
         'Equal contribution counts share a rank. Counts are contributions, not only commits.',
         'Coverage is configured GitHub location search, not a census of Kazakhstan.',
         'The first metric is total minus restricted-detail counts. With an unrestricted or unknown observer, it may include private activity visible to that observer.',
         'Total includes disclosed restricted counts; undisclosed activity is unavailable.',
-        'Locations and followers reflect collection time. Historical snapshots are not recounted.', '']
+        'Locations and followers reflect collection time.', '']
     if metadata.get('missingUsers'):
         lines += ['Unavailable accounts: ' + ', '.join(metadata['missingUsers']) + '.', '']
     for metric, title in [('visibleContributions', label), ('totalContributions', 'Total')]:
