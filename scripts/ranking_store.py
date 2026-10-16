@@ -63,11 +63,12 @@ def save_observations(scope, period, users):
     return saved
 
 
-def cached_observations(scope, profiles, period, ttl, refresh=False):
+def cached_observations(scope, profiles, period, ttl, refresh=False, reuse_snapshot=False):
     if refresh:
         return {}
     identifiers = [profile['id'] for profile in profiles]
     rows = []
+    snapshot_filter = 'AND id IN (SELECT observation_id FROM members)' if reuse_snapshot else ''
     with closing(connect()) as connection:
         batch_size = connection.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER) - 3
         for start in range(0, len(identifiers), batch_size):
@@ -75,13 +76,13 @@ def cached_observations(scope, profiles, period, ttl, refresh=False):
             placeholders = ','.join('?' for _ in batch)
             rows.extend(connection.execute(f'''SELECT id, user_id, fetched_at, total, restricted
                 FROM observations WHERE scope=? AND period_from=? AND period_to=?
-                AND user_id IN ({placeholders}) ORDER BY fetched_at, id''',
+                AND user_id IN ({placeholders}) {snapshot_filter} ORDER BY fetched_at, id''',
                 (scope, period['from'], period['to'], *batch)).fetchall())
     closed_at = (datetime.datetime.fromisoformat(period['to']).replace(hour=0, minute=0, second=0, microsecond=0)
                  + datetime.timedelta(days=1)).timestamp()
     now = time.time()
     by_id = {user_id: (identifier, total, restricted) for identifier, user_id, fetched, total, restricted in rows
-             if 0 <= now - fetched and (fetched >= closed_at if ttl is None else now - fetched < ttl)}
+             if reuse_snapshot or (0 <= now - fetched and (fetched >= closed_at if ttl is None else now - fetched < ttl))}
     return {profile['login'].lower(): {**profile, '_observation': by_id[profile['id']][0],
                 'totalContributions': by_id[profile['id']][1], 'restrictedContributionsCount': by_id[profile['id']][2]}
             for profile in profiles if profile['id'] in by_id}

@@ -239,6 +239,29 @@ class StoreTest(unittest.TestCase):
                 with self.assertRaises(BlockingIOError):
                     ranking.main()
 
+    def test_expand_retains_expired_snapshot_counts_and_fetches_new_identity_only(self):
+        alice = profile()
+        with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):
+            original = ranking.fetch_users([alice], PERIOD)
+        store.save_snapshot(self.snapshot(list(original.values())))
+        with closing(store.connect()) as connection, connection:
+            connection.execute('UPDATE observations SET fetched_at=0')
+        renamed = profile('Renamed', alice['id'])
+        bob = profile('Bob', 'ID-B')
+        with patch.object(ranking, 'collect_profiles', return_value=([renamed, bob], [])), \
+             patch.object(ranking, 'fetch_api', return_value={'u0': api_user(bob, 20, 4)}) as fetch, \
+             patch('builtins.print'):
+            ranking.collect_ranking(PERIOD, expand=True)
+        self.assertEqual(fetch.call_count, 1)
+        self.assertIn('ID-B', fetch.call_args.args[0])
+        self.assertNotIn('ID-A', fetch.call_args.args[0])
+        saved = {u['login']: u for u in store.load_snapshots()[0]['users']}
+        self.assertEqual(saved['Renamed']['totalContributions'], 12)
+        self.assertEqual(saved['Bob']['totalContributions'], 20)
+        expanded = ranking.parse_period(['--from', PERIOD['from'], '--to', PERIOD['to'], '--expand'])
+        self.assertTrue(expanded.pop('_expand'))
+        self.assertEqual(expanded, PERIOD)
+
     def test_integration_missing_account_no_special_target_and_warm_restart(self):
         profiles = [profile(f'u{i}', f'ID-{i}') for i in range(41)]
         def fetch(query, variables):

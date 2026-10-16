@@ -58,6 +58,28 @@ class SearchTest(unittest.TestCase):
         self.assertEqual(len(users), 1101)
         self.assertTrue(all('created:' in p['query'] and p['userCount'] <= 1000 for p in partitions))
 
+    def test_alias_groups_merge_unicode_and_spaced_locations_by_identity(self):
+        aliases = [f'place{i}' for i in range(11)] + ['Қазақстан', 'Алматы', 'Qazaqstan', 'Nur Sultan']
+        Path('config.json').write_text(json.dumps({'locations': [{'country': 'Kazakhstan', 'cities': ['Astana'],
+                                                                 'locationAliases': aliases}]}))
+        alice = {'id': 'ID-A', 'login': 'alice', 'followers': {'totalCount': 1}}
+        bob = {'id': 'ID-B', 'login': 'bob', 'followers': {'totalCount': 1}}
+        searches = []
+        def api(query, variables):
+            searches.append(variables['q'])
+            nodes = [alice, bob] if 'location:алматы' in variables['q'] else [alice]
+            if 'first: 1)' in query:
+                return {'search': {'nodes': nodes[:1]}}
+            return {'search': {'userCount': len(nodes), 'nodes': nodes,
+                               'pageInfo': {'hasNextPage': False, 'endCursor': None}}}
+        with patch.object(ranking, 'api', side_effect=api), patch('builtins.print'):
+            users, partitions = ranking.collect_profiles()
+        self.assertEqual({u['id'] for u in users}, {'ID-A', 'ID-B'})
+        self.assertEqual(len(partitions), 2)
+        self.assertTrue(any('location:қазақстан' in q and 'location:qazaqstan' in q for q in searches))
+        self.assertTrue(any('location:"nur sultan"' in q for q in searches))
+        self.assertTrue(all(q.count('location:') <= 12 for q in searches))
+
     def test_missing_repeated_and_cyclic_cursors_fail(self):
         for cursors in ([None], ['same', 'same'], ['a', 'b', 'a']):
             replies = [{'search': {'nodes': [{'followers': {'totalCount': 1}}]}}]

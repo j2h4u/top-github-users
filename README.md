@@ -34,9 +34,15 @@ observation must be fetched before its counts become reusable indefinitely.
 Closed periods have no arbitrary expiry; GitHub can still revise old activity after repository or visibility
 changes. Set `REFRESH_CACHE=true` to request new observations deliberately.
 
+To expand location coverage for an existing period without updating its saved
+counts, add `--expand` to the collection command. Existing snapshot counts are
+retained regardless of age; new accounts are fetched normally. Omit `--expand`
+when you want the normal freshness policy.
+
 All searches use `type:user` and split by followers/account creation dates to
 get past GitHub's 1,000-result cap. There is no truncated selection mode or
-mandatory extra account. Country and cities are in `config.json`. Missing or
+mandatory extra account. Country, cities and multilingual `locationAliases` are in
+`config.json`. Location searches run in bounded groups and merge accounts by ID. Missing or
 deleted accounts are recorded explicitly and the report is marked incomplete;
 valid accounts in the same response are retained. Other permanent errors fail
 the run. Completed batches survive interrupted runs. Progress includes an ETA

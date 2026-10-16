@@ -61,9 +61,9 @@ def api(query, variables):
 def credential_scope():
     return hashlib.sha256(os.environ['GH_TOKEN'].encode()).hexdigest()
 
-def cached_users(profiles, period):
+def cached_users(profiles, period, reuse_snapshot=False):
     return store.cached_observations(credential_scope(), profiles, period, contribution_ttl(period),
-                                    os.environ.get('REFRESH_CACHE', 'false').lower() == 'true')
+                                    os.environ.get('REFRESH_CACHE', 'false').lower() == 'true', reuse_snapshot)
 
 def fetch_users(profiles, period):
     users = cached_users(profiles, period)
@@ -236,10 +236,11 @@ def parse_period(arguments=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--from', dest='start', help='First included UTC calendar date')
     parser.add_argument('--to', dest='end', help='Last included UTC calendar date; at most one year after start')
+    parser.add_argument('--expand', action='store_true', help='Expand membership, retaining existing snapshot counts regardless of age')
     parser.add_argument('--project', action='store_true', help='Rebuild all reports from SQLite, without GitHub')
     args = parser.parse_args(arguments)
     if args.project:
-        if args.start or args.end:
+        if args.start or args.end or args.expand:
             parser.error('--project takes no period: it projects all stored snapshots')
         return None
     if not args.start or not args.end:
@@ -256,12 +257,15 @@ def parse_period(arguments=None):
             raise ValueError('Period end must not be in the future')
     except (ValueError, OverflowError) as error:
         parser.error(str(error))
-    return {key: value.isoformat().replace('+00:00', 'Z') for key, value in [('from', start), ('to', end)]}
+    period = {key: value.isoformat().replace('+00:00', 'Z') for key, value in [('from', start), ('to', end)]}
+    if args.expand:
+        period['_expand'] = True
+    return period
 
 def collect_profiles():
     country = json.loads(Path('config.json').read_text(encoding='utf-8'))['locations'][0]
-    base = 'type:user ' + ' '.join('location:' + place.replace(' ', '_').lower()
-                    for place in [country['country'], *country['cities']])
+    locations = list(dict.fromkeys(place.lower() for place in
+        [country['country'], *country['cities'], *country.get('locationAliases', [])]))
     query = '''query($q: String!, $cursor: String) {
       search(type: USER, query: $q, first: 100, after: $cursor) {
         userCount pageInfo { hasNextPage endCursor }
@@ -306,24 +310,31 @@ def collect_profiles():
                 raise RuntimeError('GitHub pagination did not advance')
             seen.add(cursor)
 
-    maximum = api('''query($q: String!) {
-      search(type: USER, query: $q, first: 1) {
-        nodes { ... on User { followers { totalCount } } }
-      }
-    }''', {'q': base + ' sort:followers-desc'})['search']['nodes']
-    if not maximum or 'followers' not in maximum[0]:
-        raise RuntimeError('Empty or invalid country search')
-    collect(0, maximum[0]['followers']['totalCount'])
+    # Bound location groups so expanding aliases does not exceed GitHub search limits.
+    for offset in range(0, len(locations), 12):
+        base = 'type:user ' + ' '.join('location:' + (json.dumps(place, ensure_ascii=False) if ' ' in place else place)
+            for place in locations[offset:offset + 12])
+        maximum = api('''query($q: String!) {
+          search(type: USER, query: $q, first: 1) {
+            nodes { ... on User { followers { totalCount } } }
+          }
+        }''', {'q': base + ' sort:followers-desc'})['search']['nodes']
+        if maximum:
+            if 'followers' not in maximum[0]:
+                raise RuntimeError('Invalid country search')
+            collect(0, maximum[0]['followers']['totalCount'])
+    if not users:
+        raise RuntimeError('Empty country search')
     if len({user['login'].lower() for user in users.values()}) != len(users):
         raise RuntimeError('Account names changed during search; refresh the search before retrying')
     return list(users.values()), partitions
 
-def collect_ranking(period):
+def collect_ranking(period, expand=False):
     started = time.monotonic()
     print(f'Included UTC calendar dates: {period["from"][:10]} -> {period["to"][:10]}', flush=True)
     profiles, partitions = collect_profiles()
     print(f'Location search completed in {time.monotonic() - started:.1f}s: {len(profiles)} users', flush=True)
-    users = cached_users(profiles, period)
+    users = cached_users(profiles, period, reuse_snapshot=expand)
     missing = [profile for profile in profiles if profile['login'].lower() not in users]
     print(f'Contributions cached: {len(users)}/{len(profiles)}; to fetch: {len(missing)}', flush=True)
     fetching_started = time.monotonic()
@@ -356,7 +367,7 @@ def main():
             for metadata in store.load_snapshots():
                 print(render_rankings(metadata))
         else:
-            collect_ranking(period)
+            collect_ranking(period, expand=period.pop('_expand', False))
 
 
 if __name__ == '__main__':
