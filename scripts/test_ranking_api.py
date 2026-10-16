@@ -1,4 +1,5 @@
 import io
+import http.client
 import json
 import os
 import unittest
@@ -70,6 +71,15 @@ class ApiTest(unittest.TestCase):
                     ranking.fetch_api('query', {})
                 self.assertEqual(fetch.call_count, 5)
                 self.assertEqual([call.args[0] for call in sleep.call_args_list], [60, 120, 240, 480])
+
+    def test_interrupted_response_body_is_retried(self):
+        for error in (http.client.IncompleteRead(b'partial', 20), ConnectionResetError('reset')):
+            broken = response()
+            with patch.object(broken, 'read', side_effect=error):
+                self.assertEqual(self.run_requests([broken, response()]), (2, [2]))
+        with patch.object(ranking.urllib.request, 'urlopen', side_effect=ConnectionResetError('last reset')):
+            with patch.object(ranking.time, 'sleep'), self.assertRaisesRegex(RuntimeError, 'last reset'):
+                ranking.fetch_api('query', {})
 
     def test_permission_and_validation_errors_do_not_retry(self):
         for error in [http_error(401), http_error(403, message='Resource not accessible')]:

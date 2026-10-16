@@ -3,6 +3,7 @@ import argparse
 from contextlib import closing
 import datetime
 import hashlib
+import http.client
 from email.utils import parsedate_to_datetime
 import json
 import os
@@ -150,6 +151,7 @@ def fetch_api(query, variables):
             time.sleep(wait)
         NEXT_REQUEST_AT = 0.0
         limited, headers = False, {}
+        failure = None
         try:
             with urllib.request.urlopen(request, timeout=90) as response:
                 headers = response.headers
@@ -158,6 +160,7 @@ def fetch_api(query, variables):
                 NEXT_REQUEST_AT = time.time() + retry_delay(headers, attempt, True)
             if result.get('errors'):
                 message = json.dumps(result['errors'])
+                failure = message
                 limited = any(e.get('type') == 'RATE_LIMITED' for e in result['errors']) or 'rate limit' in message.lower()
                 if not limited:
                     if 'timeout' in message.lower() or 'something went wrong' in message.lower():
@@ -168,6 +171,7 @@ def fetch_api(query, variables):
                     raise RuntimeError('GitHub returned no data object')
                 return result['data']
         except urllib.error.HTTPError as error:
+            failure = error
             headers = error.headers or {}
             if error.code in (403, 429):
                 body = error.read().decode('utf-8', errors='replace')
@@ -178,10 +182,10 @@ def fetch_api(query, variables):
                     raise RuntimeError(f'GitHub HTTP 403: {body}') from error
             elif error.code not in (500, 502, 503, 504):
                 raise
-        except (urllib.error.URLError, TimeoutError):
-            pass
+        except (urllib.error.URLError, TimeoutError, http.client.IncompleteRead, ConnectionError) as error:
+            failure = error
         if attempt == 4:
-            raise RuntimeError('GitHub request failed after five attempts')
+            raise RuntimeError(f'GitHub request failed after five attempts: {failure}')
         NEXT_REQUEST_AT = max(NEXT_REQUEST_AT, time.time() + retry_delay(headers, attempt, limited))
 
 
