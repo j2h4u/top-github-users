@@ -1,10 +1,12 @@
-# Kazakhstan public and total contributions for a fixed period
+# Kazakhstan public and total contribution rankings
 
-This fork recalculates Kazakhstan for **2025-09-17 03:11 UTC through 2026-09-17 03:11 UTC**.
+This fork calculates Kazakhstan rankings for exact periods up to one calendar year.
 
-- [Public ranking](markdown/public_contributions/kazakhstan.md)
-- [Total ranking, including disclosed restricted-detail counts](markdown/total_contributions/kazakhstan.md)
-- [Raw results and search partitions](cache/kazakhstan-fixed-period.json)
+Saved period: **2025-09-17 03:11 UTC through 2026-09-17 03:11 UTC**.
+
+- [Public ranking](results/2025-09-17T031100Z--2026-09-17T031100Z/public_contributions.md)
+- [Total ranking, including disclosed restricted-detail counts](results/2025-09-17T031100Z--2026-09-17T031100Z/total_contributions.md)
+- [Raw results and search partitions](results/2025-09-17T031100Z--2026-09-17T031100Z/data.json)
 - [Run the workflow](../../actions/workflows/action.yml) using **Run workflow**.
 
 The workflow uses the repository secret `CUSTOM_TOKEN` for API reads, falling back to the built-in GitHub Actions token if the secret is absent. The built-in token is used for committing results. No token is stored in source files. It writes updated results to `main` and uploads a result artifact. Scheduled runs are disabled because the contribution period is fixed.
@@ -17,16 +19,15 @@ To run locally with Python 3.12 or later and an authenticated GitHub CLI:
 
 ```bash
 export GH_TOKEN="$(gh auth token)"
-python scripts/kazakhstan_ranking.py
+python3 scripts/kazakhstan_ranking.py --from 2025-10-16 --to 2026-10-16
 unset GH_TOKEN
 ```
 
-Period constants are in `scripts/kazakhstan_ranking.py`. Country and cities are in `config.json`.
+Pass dates or ISO-8601 timestamps with `--from` and `--to`; date-only values use UTC midnight. Equivalent time zones are normalized to UTC. Each exact period has one `results/<from>--<to>/data.json` snapshot and two Markdown tables. A new period never overwrites another period. Repeating the same period updates that snapshot. Country and cities are in `config.json`. Set `FULL_COVERAGE=true` for the complete partitioned location search.
 
 Both rankings use the same fixed period and participant set. GitHub supplies
 `contributionCalendar.totalContributions` and `restrictedContributionsCount`;
-the public-labelled difference is calculated locally. Each table includes all
-three numbers and sorts independently. These are contributions, including more
+the public-labelled difference is calculated locally. The JSON stores only the two source counters; each table derives the public-labelled difference and sorts independently. These are contributions, including more
 than commits. Restricted means details unavailable to the acquisition viewer;
 the difference is only strictly public under a suitable observer access policy.
 The total includes disclosed restricted counts, not undisclosed private activity.
@@ -34,22 +35,23 @@ The total includes disclosed restricted counts, not undisclosed private activity
 To rebuild both tables from the saved JSON without any API requests:
 
 ```bash
-python3 -c 'import json; from scripts.kazakhstan_ranking import render_rankings; render_rankings(json.load(open("cache/kazakhstan-fixed-period.json")))'
+python3 -c 'import json; from scripts.kazakhstan_ranking import render_rankings; render_rankings(json.load(open("results/2025-09-17T031100Z--2026-09-17T031100Z/data.json")))'
 ```
 
-Successful API responses are saved atomically as each request completes in the
-Git-ignored `cache/api/` directory. Restarts reuse these responses: location search
+Successful API responses are saved transactionally in one private, Git-ignored
+`cache/api.sqlite3` database. Contribution responses are stored per user and exact
+period; whole batch responses are not retained as duplicate copies. Restarts reuse these responses: location search
 is cached for one day, completed contribution periods indefinitely, and ongoing
 periods for one hour. Historical counts are snapshots: GitHub can revise them
 after repository or visibility changes. Set `REFRESH_CACHE=true` to force fresh requests.
-Contributions are also cached per case-insensitive login and exact period, so
+Case-insensitive login and exact-period keys mean
 changes to the participant list, ordering, or batch boundaries only fetch missing
-users. Existing cached batch responses populate this user cache without new API
-calls. Profile metadata comes from the location search, independently of historical
+users. Overlapping periods have distinct totals and require new requests; no
+approximate subtraction or monthly aggregation is used. Profile metadata comes from the location search, independently of historical
 contributions; users explicitly added outside that search retain cached metadata.
 Cache entries are separated by a hash of the credential because restricted counts
 depend on the viewer. Tokens are never stored in the cache; rotating credentials
-starts a separate cache. Keep this directory local.
+starts a separate cache namespace. Keep the database local.
 
 Run cache checks with `python3 -m unittest discover -s scripts -p 'test_*.py'`.
 

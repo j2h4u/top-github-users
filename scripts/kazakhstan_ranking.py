@@ -1,17 +1,18 @@
-"""Fixed-period public contribution ranking, using only Python's standard library."""
+"""Contribution rankings for an exact period, using only the standard library."""
+import argparse
+from contextlib import closing
 import datetime
 import hashlib
 from email.utils import parsedate_to_datetime
 import json
 import os
+import sqlite3
 import tempfile
 from pathlib import Path
 import time
 import urllib.error
 import urllib.request
 
-FROM = '2025-09-17T03:11:00Z'
-TO = '2026-09-17T03:11:00Z'
 FIELDS = '''login location followers { totalCount }
 contributionsCollection(from: $from, to: $to) {
   contributionCalendar { totalContributions }
@@ -20,11 +21,22 @@ contributionsCollection(from: $from, to: $to) {
 NEXT_REQUEST_AT = 0.0
 
 
-def cache_path(key):
+def cache_key(key):
     # Separate credentials can see different restricted contribution counts.
     scope = hashlib.sha256(os.environ['GH_TOKEN'].encode()).hexdigest()
     digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
-    return Path('cache/api') / scope / (digest + '.json')
+    return scope + '/' + digest
+
+
+def cache_connection():
+    path = Path('cache/api.sqlite3')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch(mode=0o600, exist_ok=True)
+    connection = sqlite3.connect(path, timeout=30)
+    path.chmod(0o600)
+    connection.execute('PRAGMA journal_mode=WAL')
+    connection.execute('CREATE TABLE IF NOT EXISTS responses (key TEXT PRIMARY KEY, fetched_at REAL NOT NULL, data TEXT NOT NULL)')
+    return connection
 
 
 def contribution_ttl(period):
@@ -32,24 +44,30 @@ def contribution_ttl(period):
     return None if historical else 3600
 
 
-def read_cache(path, ttl):
-    if os.environ.get('REFRESH_CACHE', 'false').lower() != 'true' and path.exists():
-        try:
-            if ttl is None or 0 <= time.time() - path.stat().st_mtime < ttl:
-                return json.loads(path.read_text())
-        except (OSError, ValueError):
-            pass
+def read_cache(key, ttl):
+    if os.environ.get('REFRESH_CACHE', 'false').lower() != 'true':
+        with closing(cache_connection()) as connection:
+            row = connection.execute('SELECT fetched_at, data FROM responses WHERE key = ?', (key,)).fetchone()
+        if row is not None and (ttl is None or 0 <= time.time() - row[0] < ttl):
+            return json.loads(row[1])
     return None
 
 
-def write_cache(path, data):
+def write_cache(entries):
+    with closing(cache_connection()) as connection, connection:
+        connection.executemany('INSERT OR REPLACE INTO responses VALUES (?, ?, ?)',
+                               [(key, time.time(), json.dumps(data, separators=(',', ':')))
+                                for key, data in entries.items()])
+
+
+def write_json(path, data):
     directory = path.parent
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode='w', dir=directory, delete=False) as output:
             temporary = Path(output.name)
-            json.dump(data, output)
+            json.dump(data, output, ensure_ascii=False, separators=(',', ':'))
         temporary.replace(path)
     finally:
         if temporary is not None:
@@ -57,19 +75,19 @@ def write_cache(path, data):
 
 
 def api(query, variables):
-    path = cache_path([query, variables])
+    path = cache_key([query, variables])
     ttl = contribution_ttl(variables) if 'from' in variables else 86400
     data = read_cache(path, ttl)
     if data is None:
         data = fetch_api(query, variables)
-        write_cache(path, data)
+        write_cache({path: data})
     return data
 
 
 def fetch_users(logins, period):
     users, missing = {}, []
     for login in logins:
-        user = read_cache(cache_path(['user-v1', login.lower(), period]), contribution_ttl(period))
+        user = read_cache(cache_key(['user-v1', login.lower(), period]), contribution_ttl(period))
         if user is None:
             missing.append(login)
         else:
@@ -79,7 +97,7 @@ def fetch_users(logins, period):
     fields = '\n'.join(f'u{i}: user(login: {json.dumps(login)}) {{ {FIELDS} }}'
                        for i, login in enumerate(missing))
     try:
-        data = api('query($from: DateTime!, $to: DateTime!) { ' + fields + ' }', period)
+        data = fetch_api('query($from: DateTime!, $to: DateTime!) { ' + fields + ' }', period)
     except RuntimeError as error:
         if 'RESOURCE_LIMITS_EXCEEDED' not in str(error) or len(missing) == 1:
             raise
@@ -87,11 +105,13 @@ def fetch_users(logins, period):
         users.update(fetch_users(missing[:middle], period))
         users.update(fetch_users(missing[middle:], period))
         return users
+    entries = {}
     for user in data.values():
         if user:
             login = user['login'].lower()
-            write_cache(cache_path(['user-v1', login, period]), user)
+            entries[cache_key(['user-v1', login, period])] = user
             users[login] = user
+    write_cache(entries)
     return users
 
 
@@ -161,16 +181,26 @@ def fetch_api(query, variables):
         NEXT_REQUEST_AT = max(NEXT_REQUEST_AT, time.time() + retry_delay(headers, attempt, limited))
 
 
+def contribution_count(user, metric):
+    if metric == 'publicContributions':
+        return user['totalContributions'] - user['restrictedContributionsCount']
+    return user[metric]
+
+
+def result_directory(period):
+    return Path('results') / (period['from'] + '--' + period['to']).replace(':', '')
+
+
 def render_rankings(metadata):
     for user in metadata['users']:
         total, restricted = user['totalContributions'], user['restrictedContributionsCount']
-        if not 0 <= restricted <= total or user['publicContributions'] != total - restricted:
+        if not 0 <= restricted <= total:
             raise ValueError(f'Inconsistent contribution counts for {user["login"]}')
     for metric, directory, title in [
         ('publicContributions', 'public_contributions', 'Public'),
         ('totalContributions', 'total_contributions', 'Total'),
     ]:
-        ranking = sorted(metadata['users'], key=lambda u: (-u[metric], -u['followers'], u['login'].lower()))
+        ranking = sorted(metadata['users'], key=lambda u: (-contribution_count(u, metric), -u['followers'], u['login'].lower()))
         lines = [f'# Kazakhstan {title.lower()} contributions — fixed period', '',
             f'Period: `{metadata["from"]}` → `{metadata["to"]}`.',
             f'Data collected: `{metadata["generatedAt"]}`.',
@@ -186,19 +216,41 @@ def render_rankings(metadata):
             '| --- | --- | --- | --- | --- | --- |']
         previous = None
         for position, user in enumerate(ranking, 1):
-            if user[metric] != previous:
+            count = contribution_count(user, metric)
+            if count != previous:
                 current_rank = position
-            previous = user[metric]
+            previous = count
             if previous > 0:
                 lines.append(f'| {current_rank} | [{user["login"]}](https://github.com/{user["login"]}) | '
-                             f'{user["publicContributions"]} | {user["restrictedContributionsCount"]} | '
+                             f'{contribution_count(user, "publicContributions")} | {user["restrictedContributionsCount"]} | '
                              f'{user["totalContributions"]} | {user["followers"]} |')
-        path = Path('markdown') / directory / 'kazakhstan.md'
+        path = result_directory(metadata) / (directory + '.md')
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('\n'.join(lines) + '\n')
 
 
+def parse_period(arguments=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--from', dest='start', required=True, help='Inclusive ISO-8601 start (UTC if date only)')
+    parser.add_argument('--to', dest='end', required=True, help='ISO-8601 end (UTC if date only); at most one year after start')
+    args = parser.parse_args(arguments)
+    try:
+        start, end = [datetime.datetime.fromisoformat(value) for value in (args.start, args.end)]
+        start, end = [value.replace(tzinfo=datetime.timezone.utc) if value.tzinfo is None
+                      else value.astimezone(datetime.timezone.utc) for value in (start, end)]
+        if not start < end <= start.replace(year=start.year + 1, day=min(start.day, 28) if start.month == 2 else start.day):
+            raise ValueError('Period must be positive and at most one calendar year')
+        if end > datetime.datetime.now(datetime.timezone.utc):
+            raise ValueError('Period end must not be in the future')
+    except ValueError as error:
+        parser.error(str(error))
+    return {key: value.isoformat().replace('+00:00', 'Z') for key, value in [('from', start), ('to', end)]}
+
+
 def main():
+    started = time.monotonic()
+    period = parse_period()
+    print(f'Period: {period["from"]} -> {period["to"]}', flush=True)
     country = json.loads(Path('config.json').read_text())['locations'][0]
     base = ' '.join('location:' + place.replace(' ', '_').lower()
                     for place in [country['country'], *country['cities']])
@@ -208,7 +260,6 @@ def main():
         nodes { ... on User { login location followers { totalCount } } }
       }
     }'''
-    period = {'from': FROM, 'to': TO}
     users, partitions = {}, []
 
     def collect(low, high, created_start=None, created_end=None):
@@ -267,6 +318,7 @@ def main():
             if not data['pageInfo']['hasNextPage']:
                 break
             cursor = data['pageInfo']['endCursor']
+    print(f'Location search completed in {time.monotonic() - started:.1f}s: {len(users)} users', flush=True)
     found = 'physshell' in users
     logins = [user['login'] for user in users.values()]
     if not found:
@@ -288,17 +340,22 @@ def main():
         user['followers'] = user['followers']['totalCount']
         user['totalContributions'] = c['contributionCalendar']['totalContributions']
         user['restrictedContributionsCount'] = c['restrictedContributionsCount']
-        user['publicContributions'] = user['totalContributions'] - user['restrictedContributionsCount']
-    ranking = sorted(users.values(), key=lambda u: (-u['publicContributions'], -u['followers'], u['login'].lower()))
-    rank = 1 + sum(u['publicContributions'] > target['publicContributions'] for u in ranking)
+    ranking = sorted(users.values(), key=lambda u: (-contribution_count(u, 'publicContributions'), -u['followers'], u['login'].lower()))
+    rank = 1 + sum(contribution_count(u, 'publicContributions') > contribution_count(target, 'publicContributions') for u in ranking)
     metadata = {**period, 'generatedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 'selectionMode': 'full-location-search' if full_coverage else 'upstream-top-1000-search-results',
                 'targetFoundInLocationSearch': found, 'targetRank': rank,
                 'searchPartitions': partitions, 'users': ranking}
-    Path('cache').mkdir(exist_ok=True)
-    Path('cache/kazakhstan-fixed-period.json').write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + '\n')
     render_rankings(metadata)
-    print(f'PhysShell: {target["publicContributions"]} contributions, #{rank}', flush=True)
+    write_json(result_directory(period) / 'data.json', metadata)
+    for login in ('j2h4u', 'physshell'):
+        if login in users:
+            user = users[login]
+            for metric in ('publicContributions', 'totalContributions'):
+                count = contribution_count(user, metric)
+                rank = 1 + sum(contribution_count(other, metric) > count for other in ranking)
+                print(f'{user["login"]}: {metric}={count}, rank={rank}', flush=True)
+    print(f'Completed in {time.monotonic() - started:.1f}s; results: {result_directory(period)}', flush=True)
 
 
 if __name__ == '__main__':

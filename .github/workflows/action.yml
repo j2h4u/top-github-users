@@ -2,6 +2,14 @@ name: Kazakhstan fixed-period ranking
 on:
   workflow_dispatch:
     inputs:
+      from:
+        description: Start timestamp (UTC)
+        required: true
+        default: '2025-09-17T03:11:00Z'
+      to:
+        description: End timestamp (UTC)
+        required: true
+        default: '2026-09-17T03:11:00Z'
       full_coverage:
         description: 'Expand beyond the upstream 1,000 search-result selection (slow)'
         type: boolean
@@ -12,7 +20,7 @@ jobs:
   release:
     name: Kazakhstan fixed-period ranking
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,13 +29,15 @@ jobs:
       - name: Recalculate
         env:
           GH_TOKEN: ${{ secrets.CUSTOM_TOKEN || github.token }}
+          PERIOD_FROM: ${{ inputs.from }}
+          PERIOD_TO: ${{ inputs.to }}
           FULL_COVERAGE: ${{ inputs.full_coverage }}
-        run: python scripts/kazakhstan_ranking.py
+        run: python scripts/kazakhstan_ranking.py --from "$PERIOD_FROM" --to "$PERIOD_TO"
       - name: Save results
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add cache/kazakhstan-fixed-period.json markdown/public_contributions/kazakhstan.md markdown/total_contributions/kazakhstan.md
+          git add results/
           if ! git diff --cached --quiet; then
             git commit -m 'Recalculate Kazakhstan for fixed period'
             git push origin HEAD:main
@@ -35,7 +45,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: kazakhstan-fixed-period
-          path: |
-            cache/kazakhstan-fixed-period.json
-            markdown/public_contributions/kazakhstan.md
-            markdown/total_contributions/kazakhstan.md
+          path: results/
