@@ -27,8 +27,9 @@ unset GH_TOKEN
 Both dates are included, in UTC. GitHub's contribution calendar has day
 precision: timestamps are converted to UTC and then reduced to dates. A range
 can span at most one calendar year between its endpoints. The current day's
-counts are provisional and reused for one hour. Closed days have no arbitrary
-expiry; GitHub can still revise old activity after repository or visibility
+counts are provisional and reused for one hour. After that day closes, a final
+observation must be fetched before its counts become reusable indefinitely.
+Closed periods have no arbitrary expiry; GitHub can still revise old activity after repository or visibility
 changes. Set `REFRESH_CACHE=true` to request new observations deliberately.
 
 All searches use `type:user` and split by followers/account creation dates to

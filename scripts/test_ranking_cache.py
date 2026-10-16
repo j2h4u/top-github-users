@@ -86,7 +86,8 @@ class StoreTest(unittest.TestCase):
         with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):
             ranking.fetch_users([alice], PERIOD)
         with closing(store.connect()) as connection, connection:
-            connection.execute('UPDATE observations SET fetched_at=0')
+            connection.execute('UPDATE observations SET fetched_at=?',
+                               (datetime.datetime(2026, 9, 18, tzinfo=datetime.timezone.utc).timestamp(),))
         self.assertEqual(len(ranking.cached_users([alice], PERIOD)), 1)
         current = {**PERIOD, 'to': datetime.datetime.now(datetime.timezone.utc).isoformat()}
         with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):
@@ -115,6 +116,20 @@ class StoreTest(unittest.TestCase):
             self.assertEqual(len(ranking.fetch_users(profiles, PERIOD)), 2)
             self.assertEqual(fetch.call_count, 3)
         self.assertEqual(len(ranking.cached_users(profiles, PERIOD)), 2)
+
+    def test_partial_day_is_not_promoted_to_permanent_after_midnight(self):
+        alice = profile()
+        period = {**PERIOD, 'to': '2026-10-16T00:00:00Z'}
+        midnight = datetime.datetime(2026, 10, 17, tzinfo=datetime.timezone.utc).timestamp()
+        with patch.object(store.time, 'time', return_value=midnight - 600):
+            store.save_observations(ranking.credential_scope(), period, [api_user(alice)])
+        with patch.object(store.time, 'time', return_value=midnight + 60):
+            self.assertEqual(store.cached_observations(ranking.credential_scope(), [alice], period, None), {})
+            store.save_observations(ranking.credential_scope(), period, [api_user(alice, 14, 4)])
+        with patch.object(store.time, 'time', return_value=midnight + 90 * 86400):
+            cached = store.cached_observations(ranking.credential_scope(), [alice], period, None)
+            self.assertEqual(cached['alice']['totalContributions'], 14)
+            self.assertEqual(cached['alice']['restrictedContributionsCount'], 4)
 
     def test_partial_null_accounts_and_independent_snapshots(self):
         alice, bob = profile(), profile('Bob', 'ID-B')
