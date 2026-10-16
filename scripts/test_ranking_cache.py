@@ -2,6 +2,7 @@ import datetime
 from contextlib import closing
 import json
 import os
+import sqlite3
 from pathlib import Path
 import tempfile
 import unittest
@@ -180,7 +181,12 @@ class StoreTest(unittest.TestCase):
     def test_bulk_cached_reads_use_one_connection(self):
         profiles = [profile(f'u{i}', f'ID-{i}') for i in range(300)]
         store.save_observations(ranking.credential_scope(), PERIOD, [api_user(p) for p in profiles])
-        with patch.object(store, 'connect', wraps=store.connect) as connection:
+        connect = store.connect
+        def limited_connection():
+            connection = connect()
+            connection.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 20)
+            return connection
+        with patch.object(store, 'connect', side_effect=limited_connection) as connection:
             users = ranking.cached_users(profiles, PERIOD)
         self.assertEqual(len(users), 300)
         self.assertEqual(connection.call_count, 1)

@@ -65,10 +65,17 @@ def save_observations(scope, period, users):
 def cached_observations(scope, profiles, period, ttl, refresh=False):
     if refresh:
         return {}
+    identifiers = [profile['id'] for profile in profiles]
+    rows = []
     with closing(connect()) as connection:
-        rows = connection.execute('''SELECT id, user_id, fetched_at, total, restricted
-            FROM observations WHERE scope=? AND period_from=? AND period_to=?
-            ORDER BY fetched_at, id''', (scope, period['from'], period['to'])).fetchall()
+        batch_size = connection.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER) - 3
+        for start in range(0, len(identifiers), batch_size):
+            batch = identifiers[start:start + batch_size]
+            placeholders = ','.join('?' for _ in batch)
+            rows.extend(connection.execute(f'''SELECT id, user_id, fetched_at, total, restricted
+                FROM observations WHERE scope=? AND period_from=? AND period_to=?
+                AND user_id IN ({placeholders}) ORDER BY fetched_at, id''',
+                (scope, period['from'], period['to'], *batch)).fetchall())
     by_id = {user_id: (identifier, total, restricted) for identifier, user_id, fetched, total, restricted in rows
              if ttl is None or 0 <= time.time() - fetched < ttl}
     return {profile['login'].lower(): {**profile, '_observation': by_id[profile['id']][0],
