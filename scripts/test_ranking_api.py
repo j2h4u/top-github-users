@@ -81,6 +81,20 @@ class ApiTest(unittest.TestCase):
             with patch.object(ranking.time, 'sleep'), self.assertRaisesRegex(RuntimeError, 'last reset'):
                 ranking.fetch_api('query', {})
 
+    def test_not_found_preserves_valid_partial_data_only_at_null_alias(self):
+        payload = {'data': {'u0': {'id': 'A'}, 'u1': None},
+                   'errors': [{'type': 'NOT_FOUND', 'path': ['u1'], 'message': 'deleted'}]}
+        with patch.object(ranking.urllib.request, 'urlopen', return_value=response(payload)):
+            self.assertEqual(ranking.fetch_api('query', {}), payload['data'])
+        for errors in ([{'type': 'NOT_FOUND', 'path': ['u0']}],
+                       [{'type': 'NOT_FOUND', 'path': ['u1', 'field']}],
+                       [{'type': 'FORBIDDEN', 'path': ['u1']}]):
+            payload['errors'] = errors
+            with patch.object(ranking.urllib.request, 'urlopen', return_value=response(payload)) as fetch:
+                with self.assertRaises(RuntimeError):
+                    ranking.fetch_api('query', {})
+                self.assertEqual(fetch.call_count, 1)
+
     def test_permission_and_validation_errors_do_not_retry(self):
         for error in [http_error(401), http_error(403, message='Resource not accessible')]:
             with patch.object(ranking.urllib.request, 'urlopen', side_effect=error) as fetch:
