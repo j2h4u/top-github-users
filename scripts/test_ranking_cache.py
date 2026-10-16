@@ -104,11 +104,75 @@ class StoreTest(unittest.TestCase):
 
     def test_wrong_identity_missing_alias_and_bad_counts_are_not_cached(self):
         alice = profile()
-        for reply in ({}, {'u0': api_user(profile(identifier='OTHER'))}, {'u0': api_user(alice, 1, 2)}):
+        for reply in ({}, {'u0': api_user(profile(identifier='OTHER'))}, {'u0': api_user(alice, 1, 2)},
+                      {'u0': {**api_user(alice), 'login': ''}}, {'u0': {**api_user(alice), 'login': None}}):
             with patch.object(ranking, 'fetch_api', return_value=reply):
                 with self.assertRaises((RuntimeError, ValueError)):
                     ranking.fetch_users([alice], PERIOD)
             self.assertEqual(ranking.cached_users([alice], PERIOD), {})
+
+    def test_rename_and_reused_login_keep_each_account_and_its_counts(self):
+        alice, bob = profile('OldName'), profile('OtherSearchName', 'ID-B')
+        renamed = {**api_user(alice), 'login': 'NewName'}
+        reused = {**api_user(bob, 20, 4), 'login': 'OldName'}
+        with patch.object(ranking, 'collect_profiles', return_value=([alice, bob], [])), \
+             patch.object(ranking, 'fetch_api', return_value={'u0': renamed, 'u1': reused}), patch('builtins.print'):
+            ranking.collect_ranking(PERIOD)
+        saved = store.load_snapshots()[0]
+        self.assertNotIn('missingUsers', saved)
+        users = {u['id']: u for u in saved['users']}
+        self.assertEqual((users['ID-A']['login'], users['ID-A']['totalContributions']), ('NewName', 12))
+        self.assertEqual((users['ID-B']['login'], users['ID-B']['totalContributions']), ('OldName', 20))
+        text = (ranking.result_directory(PERIOD) / 'contributions.md').read_text()
+        self.assertIn('[NewName](https://github.com/NewName)', text)
+        with patch.object(ranking, 'fetch_api', side_effect=AssertionError('cached')):
+            cached = ranking.fetch_users([profile('NewName'), profile('OldName', 'ID-B')], PERIOD)
+        self.assertEqual(cached['newname']['totalContributions'], 12)
+        self.assertEqual(cached['oldname']['totalContributions'], 20)
+
+    def test_case_only_rename_uses_returned_login(self):
+        alice = profile()
+        with patch.object(ranking, 'fetch_api', return_value={'u0': {**api_user(alice), 'login': 'ALICE'}}):
+            users = ranking.fetch_users([alice], PERIOD)
+        self.assertEqual(users['alice']['login'], 'ALICE')
+
+    def test_cached_search_cannot_revert_a_newer_login_observation(self):
+        baseline = datetime.datetime(2026, 9, 18, tzinfo=datetime.timezone.utc).timestamp()
+        alice = {**profile('OldName'), '_profileFetchedAt': baseline + 100}
+        with patch.object(store.time, 'time', return_value=baseline + 200), \
+             patch.object(ranking, 'fetch_api', return_value={'u0': {**api_user(alice), 'login': 'NewName'}}):
+            original = ranking.fetch_users([alice], PERIOD)
+        self.assertEqual(original['oldname']['login'], 'NewName')
+        with patch.object(ranking, 'fetch_api', side_effect=AssertionError('cached')):
+            warm = ranking.fetch_users([alice], PERIOD)
+            self.assertEqual(warm['oldname']['login'], 'NewName')
+            fresh_profile = {**alice, 'login': 'NewestName', '_profileFetchedAt': baseline + 300}
+            fresh = ranking.fetch_users([fresh_profile], PERIOD)
+            self.assertEqual(fresh['newestname']['login'], 'NewestName')
+
+    def test_final_login_collisions_preserve_previous_snapshot_and_report(self):
+        ready = profile('Ready', 'ID-READY')
+        with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(ready)}):
+            original = ranking.fetch_users([ready], PERIOD)
+        store.save_snapshot(self.snapshot(list(original.values())))
+        before = store.load_snapshots()
+        report = ranking.render_rankings(before[0])
+        previous = report.read_bytes()
+        for unavailable in (False, True):
+            profiles = [profile(f'u{i}', f'ID-{i}') for i in range(21)]
+            profiles[-1]['login'] = 'same'
+            def fetch(query, variables):
+                batch = [p for p in profiles if json.dumps(p['id']) in query]
+                return {f'u{i}': None if unavailable and p['id'] == 'ID-20' else
+                        {**api_user(p), 'login': 'Same' if p['id'] in ('ID-0', 'ID-20') else p['login']}
+                        for i, p in enumerate(batch)}
+            with patch.dict(os.environ, {'REFRESH_CACHE': 'true'}), \
+                 patch.object(ranking, 'collect_profiles', return_value=(profiles, [])), \
+                 patch.object(ranking, 'fetch_api', side_effect=fetch), patch('builtins.print'):
+                with self.assertRaisesRegex(RuntimeError, 'names changed during collection'):
+                    ranking.collect_ranking(PERIOD)
+            self.assertEqual(store.load_snapshots(), before)
+            self.assertEqual(report.read_bytes(), previous)
 
     def test_resource_limited_batch_splits_without_losing_successes(self):
         profiles = [profile(), profile('Bob', 'ID-B')]

@@ -74,16 +74,20 @@ def cached_observations(scope, profiles, period, ttl, refresh=False, reuse_snaps
         for start in range(0, len(identifiers), batch_size):
             batch = identifiers[start:start + batch_size]
             placeholders = ','.join('?' for _ in batch)
-            rows.extend(connection.execute(f'''SELECT id, user_id, fetched_at, total, restricted
+            rows.extend(connection.execute(f'''SELECT id, user_id, fetched_at, total, restricted, login
                 FROM observations WHERE scope=? AND period_from=? AND period_to=?
                 AND user_id IN ({placeholders}) {snapshot_filter} ORDER BY fetched_at, id''',
                 (scope, period['from'], period['to'], *batch)).fetchall())
     closed_at = (datetime.datetime.fromisoformat(period['to']).replace(hour=0, minute=0, second=0, microsecond=0)
                  + datetime.timedelta(days=1)).timestamp()
     now = time.time()
-    by_id = {user_id: (identifier, total, restricted) for identifier, user_id, fetched, total, restricted in rows
+    by_id = {user_id: (identifier, total, restricted, login, fetched)
+             for identifier, user_id, fetched, total, restricted, login in rows
              if reuse_snapshot or (0 <= now - fetched and (fetched >= closed_at if ttl is None else now - fetched < ttl))}
-    return {profile['login'].lower(): {**profile, '_observation': by_id[profile['id']][0],
+    return {profile['login'].lower(): {**profile,
+                'login': by_id[profile['id']][3] if by_id[profile['id']][4] > profile.get('_profileFetchedAt', now)
+                         else profile['login'],
+                '_observation': by_id[profile['id']][0],
                 'totalContributions': by_id[profile['id']][1], 'restrictedContributionsCount': by_id[profile['id']][2]}
             for profile in profiles if profile['id'] in by_id}
 
@@ -105,12 +109,12 @@ def save_snapshot(metadata):
                 raise ValueError('Snapshot does not match its saved observation')
             if user['id'] != observation[4]:
                 raise ValueError('Snapshot identity does not match its saved observation')
-            profile = {k: v for k, v in user.items() if k not in ('_observation', 'totalContributions', 'restrictedContributionsCount', 'login', 'id')}
+            profile = {k: v for k, v in user.items() if k not in ('_observation', '_profileFetchedAt', 'totalContributions', 'restrictedContributionsCount', 'login', 'id')}
             connection.execute('INSERT INTO members VALUES (?, ?, ?, ?, ?, ?)',
                                (snapshot, position, user['login'], json.dumps(profile, ensure_ascii=False), user['_observation'], 'ok'))
         unavailable = metadata.get('unavailableUsers', [])
         for position, user in enumerate(unavailable, len(users)):
-            profile = {k: v for k, v in user.items() if k != 'login'}
+            profile = {k: v for k, v in user.items() if k not in ('login', '_profileFetchedAt')}
             connection.execute('INSERT INTO members VALUES (?, ?, ?, ?, NULL, ?)',
                                (snapshot, position, user['login'], json.dumps(profile, ensure_ascii=False), 'unavailable'))
         connection.execute('''DELETE FROM observations WHERE id NOT IN (

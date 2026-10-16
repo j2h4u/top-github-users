@@ -39,7 +39,7 @@ def read_cache(key, ttl):
         with closing(store.connect()) as connection:
             row = connection.execute('SELECT fetched_at, data FROM responses WHERE key = ?', (key,)).fetchone()
         if row is not None and (ttl is None or 0 <= time.time() - row[0] < ttl):
-            return json.loads(row[1])
+            return {**json.loads(row[1]), '_fetchedAt': row[0]}
     return None
 
 def write_cache(entries):
@@ -56,6 +56,7 @@ def api(query, variables):
     if data is None:
         data = fetch_api(query, variables)
         write_cache({path: data})
+        data = {**data, '_fetchedAt': time.time()}
     return data
 
 def credential_scope():
@@ -89,13 +90,15 @@ def fetch_users(profiles, period):
         if user is not None:
             if user.get('id') != profile['id']:
                 raise RuntimeError('GitHub returned a different account identity')
+            if not isinstance(user.get('login'), str) or not user['login']:
+                raise RuntimeError('GitHub returned an account without a login')
             valid.append(user)
     saved = store.save_observations(credential_scope(), period, valid)
     for i, profile in enumerate(missing):
         user = data[f'u{i}']
         if user is not None:
             counts = user['contributionsCollection']
-            users[profile['login'].lower()] = {**profile, '_observation': saved[user['id']],
+            users[profile['login'].lower()] = {**profile, 'login': user['login'], '_observation': saved[user['id']],
                 'totalContributions': counts['contributionCalendar']['totalContributions'],
                 'restrictedContributionsCount': counts['restrictedContributionsCount']}
     return users
@@ -279,7 +282,8 @@ def collect_profiles():
             q += f' created:{created_start.isoformat()}..{created_end.isoformat()}'
         cursor, seen, first = None, set(), True
         while True:
-            data = api(query, {'q': q, 'cursor': cursor})['search']
+            response = api(query, {'q': q, 'cursor': cursor})
+            data = response['search']
             if first and data['userCount'] > 1000:
                 if low != high:
                     middle = (low + high) // 2
@@ -302,7 +306,7 @@ def collect_profiles():
                     raise RuntimeError('User search returned an account without identity')
                 if not any(fragment.lower() in (user.get('location') or '').lower()
                            for fragment in country.get('excludedLocationFragments', [])):
-                    users[user['id']] = user
+                    users[user['id']] = {**user, '_profileFetchedAt': response.get('_fetchedAt', time.time())}
             print(f'Fetched {len(users)} users', flush=True)
             if not data['pageInfo']['hasNextPage']:
                 return
@@ -351,6 +355,9 @@ def collect_ranking(period, expand=False):
                 'observerPolicy': 'authenticated-viewer', 'credentialScope': credential_scope(),
                 'searchPartitions': partitions, 'users': records,
                 'unavailableUsers': [p for p in profiles if p['login'].lower() not in users]}
+    members = [*records, *metadata['unavailableUsers']]
+    if len({user['login'].lower() for user in members}) != len(members):
+        raise RuntimeError('Account names changed during collection; refresh the search before retrying')
     store.save_snapshot(metadata)
     # Project the committed database, never an uncommitted in-memory candidate.
     saved = next(s for s in store.load_snapshots() if s['from'] == period['from'] and s['to'] == period['to'])
