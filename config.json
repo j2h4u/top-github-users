@@ -1,9 +1,7 @@
 {
-  "devMode": "false",
   "locations": [
     {
       "country": "kazakhstan",
-      "geoName": "Kazakhstan",
       "cities": [
         "almaty",
         "shymkent",
@@ -17,7 +15,6 @@
         "aktobe",
         "kostanay"
       ],
-      "imageUrl": "https://upload.wikimedia.org/wikipedia/commons/d/d3/Flag_of_Kazakhstan.svg",
       "locationAliases": [
         "казахстан",
         "қазақстан",
