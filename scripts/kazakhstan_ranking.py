@@ -301,12 +301,14 @@ def collect_profiles():
             if first:
                 partitions.append({'query': q, 'userCount': data['userCount']})
             first = False
+            fetched_at = response.get('_fetchedAt', time.time())
             for user in data['nodes']:
                 if not user.get('id') or not user.get('login'):
                     raise RuntimeError('User search returned an account without identity')
                 if not any(fragment.lower() in (user.get('location') or '').lower()
                            for fragment in country.get('excludedLocationFragments', [])):
-                    users[user['id']] = {**user, '_profileFetchedAt': response.get('_fetchedAt', time.time())}
+                    if user['id'] not in users or users[user['id']]['_profileFetchedAt'] <= fetched_at:
+                        users[user['id']] = {**user, '_profileFetchedAt': fetched_at}
             print(f'Fetched {len(users)} users', flush=True)
             if not data['pageInfo']['hasNextPage']:
                 return

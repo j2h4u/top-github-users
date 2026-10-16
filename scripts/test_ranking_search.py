@@ -92,6 +92,19 @@ class SearchTest(unittest.TestCase):
             users, _ = ranking.collect_profiles()
         self.assertEqual([u['id'] for u in users], ['ID-0'])
 
+    def test_overlapping_groups_keep_the_newest_search_profile(self):
+        Path('config.json').write_text(json.dumps({'locations': [{'country': 'Kazakhstan', 'cities': ['Astana'],
+            'locationAliases': [f'place{i}' for i in range(11)]}]}))
+        def api(query, variables):
+            stale = 'location:place10' in variables['q']
+            user = {'id': 'ID-A', 'login': 'OldName' if stale else 'NewName', 'followers': {'totalCount': 1}}
+            search = {'nodes': [user], 'userCount': 1, 'pageInfo': {'hasNextPage': False}}
+            return {'search': search, '_fetchedAt': 100 if stale else 300}
+        with patch.object(ranking, 'api', side_effect=api), patch('builtins.print'):
+            users, partitions = ranking.collect_profiles()
+        self.assertEqual(len(partitions), 2)
+        self.assertEqual([(u['login'], u['_profileFetchedAt']) for u in users], [('NewName', 300)])
+
     def test_missing_repeated_and_cyclic_cursors_fail(self):
         for cursors in ([None], ['same', 'same'], ['a', 'b', 'a']):
             replies = [{'search': {'nodes': [{'followers': {'totalCount': 1}}]}}]
