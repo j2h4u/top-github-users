@@ -81,6 +81,7 @@ class StoreTest(unittest.TestCase):
             self.assertEqual(fetch.call_count, 1)
             with closing(store.connect()) as connection, connection:
                 connection.execute('UPDATE responses SET fetched_at=0')
+                connection.execute("INSERT INTO responses VALUES ('retired-search-key', 0, '{}')")
             ranking.api('search', {'q': 'test'})
             self.assertEqual(fetch.call_count, 2)
         with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):

@@ -44,6 +44,7 @@ def read_cache(key, ttl):
 
 def write_cache(entries):
     with closing(store.connect()) as connection, connection:
+        connection.execute('DELETE FROM responses WHERE fetched_at < ?', (time.time() - 86400,))
         connection.executemany('INSERT OR REPLACE INTO responses VALUES (?, ?, ?)',
                                [(key, time.time(), json.dumps(data, separators=(',', ':')))
                                 for key, data in entries.items()])
