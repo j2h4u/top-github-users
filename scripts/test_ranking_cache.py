@@ -154,6 +154,22 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.DATABASE.stat().st_mode & 0o777, 0o600)
         self.assertEqual(list(Path('results').glob('**/*.json')), [])
 
+    def test_refresh_preserves_ready_snapshot_then_removes_old_observation(self):
+        alice = profile()
+        with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):
+            original = ranking.fetch_users([alice], PERIOD)
+        store.save_snapshot(self.snapshot(list(original.values())))
+        with patch.dict(os.environ, {'REFRESH_CACHE': 'true'}):
+            with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice, 20, 4)}):
+                refreshed = ranking.fetch_users([alice], PERIOD)
+        self.assertEqual(store.load_snapshots()[0]['users'][0]['totalContributions'], 12)
+        with closing(store.connect()) as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM observations').fetchone()[0], 2)
+        store.save_snapshot(self.snapshot(list(refreshed.values())))
+        self.assertEqual(store.load_snapshots()[0]['users'][0]['totalContributions'], 20)
+        with closing(store.connect()) as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM observations').fetchone()[0], 1)
+
     def test_transaction_failure_preserves_old_snapshot(self):
         alice = profile()
         with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):

@@ -112,6 +112,9 @@ def save_snapshot(metadata):
             profile = {k: v for k, v in user.items() if k != 'login'}
             connection.execute('INSERT INTO members VALUES (?, ?, ?, ?, NULL, ?)',
                                (snapshot, position, user['login'], json.dumps(profile, ensure_ascii=False), 'unavailable'))
+        connection.execute('''DELETE FROM observations WHERE id NOT IN (
+            SELECT MAX(id) FROM observations GROUP BY scope, user_id, period_from, period_to
+            UNION SELECT observation_id FROM members WHERE observation_id IS NOT NULL)''')
 
 
 def load_snapshots():
