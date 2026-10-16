@@ -95,6 +95,25 @@ class ApiTest(unittest.TestCase):
                     ranking.fetch_api('query', {})
                 self.assertEqual(fetch.call_count, 1)
 
+    def test_truncated_json_and_utf8_responses_are_retried(self):
+        for body in (b'{"data":', b'{"data":{"text":"\xd0'):
+            broken = io.BytesIO(body)
+            broken.headers = {}
+            self.assertEqual(self.run_requests([broken, response()]), (2, [2]))
+
+    def test_malformed_json_stops_after_five_attempts(self):
+        replies = []
+        for _ in range(5):
+            broken = io.BytesIO(b'{"data":')
+            broken.headers = {}
+            replies.append(broken)
+        with patch.object(ranking.urllib.request, 'urlopen', side_effect=replies) as fetch, \
+             patch.object(ranking.time, 'time', return_value=1000), patch.object(ranking.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError, 'after five attempts'):
+                ranking.fetch_api('query', {})
+        self.assertEqual(fetch.call_count, 5)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [2, 4, 8, 16])
+
     def test_permission_and_validation_errors_do_not_retry(self):
         for error in [http_error(401), http_error(403, message='Resource not accessible')]:
             with patch.object(ranking.urllib.request, 'urlopen', side_effect=error) as fetch:

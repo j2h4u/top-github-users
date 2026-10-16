@@ -166,7 +166,8 @@ def fetch_api(query, variables):
                     raise RuntimeError(f'GitHub HTTP 403: {body}') from error
             elif error.code not in (500, 502, 503, 504):
                 raise
-        except (urllib.error.URLError, TimeoutError, http.client.IncompleteRead, ConnectionError) as error:
+        except (urllib.error.URLError, TimeoutError, http.client.IncompleteRead, ConnectionError,
+                json.JSONDecodeError, UnicodeDecodeError) as error:
             failure = error
         if attempt == 4:
             raise RuntimeError(f'GitHub request failed after five attempts: {failure}')
