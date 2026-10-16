@@ -27,7 +27,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add cache/kazakhstan-fixed-period.json markdown/public_contributions/kazakhstan.md
+          git add cache/kazakhstan-fixed-period.json markdown/public_contributions/kazakhstan.md markdown/total_contributions/kazakhstan.md
           if ! git diff --cached --quiet; then
             git commit -m 'Recalculate Kazakhstan for fixed period'
             git push origin HEAD:main
@@ -38,3 +38,4 @@ jobs:
           path: |
             cache/kazakhstan-fixed-period.json
             markdown/public_contributions/kazakhstan.md
+            markdown/total_contributions/kazakhstan.md

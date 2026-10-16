@@ -1,8 +1,9 @@
-# Kazakhstan public contributions for a fixed period
+# Kazakhstan public and total contributions for a fixed period
 
 This fork recalculates Kazakhstan for **2025-09-17 03:11 UTC through 2026-09-17 03:11 UTC**.
 
-- [Ranking](markdown/public_contributions/kazakhstan.md)
+- [Public ranking](markdown/public_contributions/kazakhstan.md)
+- [Total ranking, including disclosed restricted-detail counts](markdown/total_contributions/kazakhstan.md)
 - [Raw results and search partitions](cache/kazakhstan-fixed-period.json)
 - [Run the workflow](../../actions/workflows/action.yml) using **Run workflow**.
 
@@ -21,6 +22,20 @@ unset GH_TOKEN
 ```
 
 Period constants are in `scripts/kazakhstan_ranking.py`. Country and cities are in `config.json`.
+
+Both rankings use the same fixed period and participant set. GitHub supplies
+`contributionCalendar.totalContributions` and `restrictedContributionsCount`;
+the public-labelled difference is calculated locally. Each table includes all
+three numbers and sorts independently. These are contributions, including more
+than commits. Restricted means details unavailable to the acquisition viewer;
+the difference is only strictly public under a suitable observer access policy.
+The total includes disclosed restricted counts, not undisclosed private activity.
+
+To rebuild both tables from the saved JSON without any API requests:
+
+```bash
+python3 -c 'import json; from scripts.kazakhstan_ranking import render_rankings; render_rankings(json.load(open("cache/kazakhstan-fixed-period.json")))'
+```
 
 Successful API responses are saved atomically as each request completes in the
 Git-ignored `cache/api/` directory. Restarts reuse these responses: location search

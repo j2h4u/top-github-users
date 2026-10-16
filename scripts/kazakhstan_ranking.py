@@ -161,6 +161,43 @@ def fetch_api(query, variables):
         NEXT_REQUEST_AT = max(NEXT_REQUEST_AT, time.time() + retry_delay(headers, attempt, limited))
 
 
+def render_rankings(metadata):
+    for user in metadata['users']:
+        total, restricted = user['totalContributions'], user['restrictedContributionsCount']
+        if not 0 <= restricted <= total or user['publicContributions'] != total - restricted:
+            raise ValueError(f'Inconsistent contribution counts for {user["login"]}')
+    for metric, directory, title in [
+        ('publicContributions', 'public_contributions', 'Public'),
+        ('totalContributions', 'total_contributions', 'Total'),
+    ]:
+        ranking = sorted(metadata['users'], key=lambda u: (-u[metric], -u['followers'], u['login'].lower()))
+        lines = [f'# Kazakhstan {title.lower()} contributions — fixed period', '',
+            f'Period: `{metadata["from"]}` → `{metadata["to"]}`.',
+            f'Data collected: `{metadata["generatedAt"]}`.',
+            f'Accounts fetched: **{len(ranking)}**.', '',
+            f'Selection mode: `{metadata["selectionMode"]}`.', '',
+            'Equal contribution counts share a rank.',
+            'Coverage includes configured GitHub location search results, not every developer in Kazakhstan.',
+            'Counts include contribution activity, not only commits.',
+            'Public is the legacy label for total minus restricted-detail contributions; classification depends on viewer access.',
+            'Total includes the restricted-detail counts disclosed by each account; undisclosed activity is unavailable.',
+            'Locations and follower counts reflect collection time.', '',
+            '| Rank | User | Public | Restricted detail | Total | Followers |',
+            '| --- | --- | --- | --- | --- | --- |']
+        previous = None
+        for position, user in enumerate(ranking, 1):
+            if user[metric] != previous:
+                current_rank = position
+            previous = user[metric]
+            if previous > 0:
+                lines.append(f'| {current_rank} | [{user["login"]}](https://github.com/{user["login"]}) | '
+                             f'{user["publicContributions"]} | {user["restrictedContributionsCount"]} | '
+                             f'{user["totalContributions"]} | {user["followers"]} |')
+        path = Path('markdown') / directory / 'kazakhstan.md'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('\n'.join(lines) + '\n')
+
+
 def main():
     country = json.loads(Path('config.json').read_text())['locations'][0]
     base = ' '.join('location:' + place.replace(' ', '_').lower()
@@ -260,26 +297,7 @@ def main():
                 'searchPartitions': partitions, 'users': ranking}
     Path('cache').mkdir(exist_ok=True)
     Path('cache/kazakhstan-fixed-period.json').write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + '\n')
-    lines = ['# Kazakhstan public contributions — fixed period', '',
-        f'Period: `{FROM}` → `{TO}`.', f'Generated: `{metadata["generatedAt"]}`.',
-        f'PhysShell: **{target["publicContributions"]} contributions; rank #{rank}**.',
-        f'Found by location search: **{found}**. Accounts fetched: **{len(ranking)}**.', '',
-        f'Selection mode: `{metadata["selectionMode"]}`.', '',
-        'Equal contribution counts share a rank.',
-        ('Search is partitioned by followers and account creation date to avoid the 1,000-result cap.'
-         if full_coverage else 'Uses the upstream first 1,000 search results, sorted by followers.'),
-        'Coverage includes GitHub location search results, not every developer in Kazakhstan.',
-        'Profile locations and follower counts are current; contribution dates are fixed.', '',
-        '| Rank | User | Public contributions | Followers |', '| --- | --- | --- | --- |']
-    previous = None
-    for position, user in enumerate(ranking, 1):
-        if user['publicContributions'] != previous:
-            current_rank = position
-        previous = user['publicContributions']
-        if previous > 0:
-            lines.append(f'| {current_rank} | [{user["login"]}](https://github.com/{user["login"]}) | {previous} | {user["followers"]} |')
-    Path('markdown/public_contributions').mkdir(parents=True, exist_ok=True)
-    Path('markdown/public_contributions/kazakhstan.md').write_text('\n'.join(lines) + '\n')
+    render_rankings(metadata)
     print(f'PhysShell: {target["publicContributions"]} contributions, #{rank}', flush=True)
 
 
