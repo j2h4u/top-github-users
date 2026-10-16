@@ -16,7 +16,7 @@ import urllib.request
 
 import ranking_store as store
 
-FIELDS = '''id login location followers { totalCount }
+FIELDS = '''id login
 contributionsCollection(from: $from, to: $to) {
   contributionCalendar { totalContributions }
   restrictedContributionsCount
@@ -184,13 +184,17 @@ def render_rankings(metadata):
     for user in metadata['users']:
         store.validate_counts(user['totalContributions'], user['restrictedContributionsCount'])
     label = 'Visible to acquisition viewer'
+    final_day_open = (datetime.datetime.fromisoformat(metadata['to']).date()
+                      >= datetime.datetime.fromisoformat(metadata['generatedAt']).date())
     lines = ['# Kazakhstan contribution rankings', '',
         f'Period: `{metadata["from"]}` → `{metadata["to"]}`.',
-        f'Data collected: `{metadata["generatedAt"]}`.',
+        f'Snapshot completed: `{metadata["generatedAt"]}`.',
         f'Accounts fetched: **{len(metadata["users"])}**.',
         f'Selection mode: `{metadata["selectionMode"]}`.',
         f'Observer policy: `{metadata["observerPolicy"]}`.',
-        f'Period semantics: `{metadata["periodSemantics"]}`.',
+        'Both UTC dates are included.' + (' The final day was still in progress when this snapshot completed.'
+                                        if final_day_open else ''),
+        'Counts reflect their individual acquisition times.',
         f'Unavailable accounts: {len(metadata.get("missingUsers", []))}; snapshot ' +
             ('incomplete.' if metadata.get('missingUsers') else 'complete.'), '',
         'Equal contribution counts share a rank. Counts are contributions, not only commits.',
@@ -339,9 +343,6 @@ def collect_ranking(period):
     # Project the committed database, never an uncommitted in-memory candidate.
     saved = next(s for s in store.load_snapshots() if s['from'] == period['from'] and s['to'] == period['to'])
     path = render_rankings(saved)
-    if os.environ.get('GITHUB_OUTPUT'):
-        with Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8') as output:
-            output.write(f'report={path.as_posix()}\n')
     print(f'Completed in {time.monotonic() - started:.1f}s; report: {path}', flush=True)
 
 def main():

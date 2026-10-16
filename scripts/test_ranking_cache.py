@@ -20,7 +20,7 @@ def profile(login='Alice', identifier='ID-A', followers=1):
 
 
 def api_user(item, total=12, restricted=3):
-    return {**item, 'contributionsCollection': {'contributionCalendar': {'totalContributions': total},
+    return {'id': item['id'], 'login': item['login'], 'contributionsCollection': {'contributionCalendar': {'totalContributions': total},
                                                'restrictedContributionsCount': restricted}}
 
 
@@ -36,7 +36,7 @@ class StoreTest(unittest.TestCase):
         self.addCleanup(os.chdir, self.previous)
 
     def snapshot(self, users, period=None, **extra):
-        return {**(period or PERIOD), 'generatedAt': 'saved-time', 'selectionMode': 'full-location-search',
+        return {**(period or PERIOD), 'generatedAt': '2026-09-18T12:00:00Z', 'selectionMode': 'full-location-search',
                 'observerPolicy': 'authenticated-viewer', 'periodSemantics': 'inclusive-UTC-calendar-dates',
                 'users': [{**user, 'followers': user['followers']['totalCount']} for user in users], **extra}
 
@@ -168,14 +168,18 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.load_snapshots(), before)
 
     def test_atomic_projector_two_rankings_ties_and_policy(self):
-        metadata = {**PERIOD, 'generatedAt': 'saved-time', 'selectionMode': 'full-location-search',
+        metadata = {**PERIOD, 'generatedAt': '2026-09-18T12:00:00Z', 'selectionMode': 'full-location-search',
                     'observerPolicy': 'authenticated-viewer', 'periodSemantics': 'inclusive-UTC-calendar-dates', 'users': [
             {'login': 'A', 'followers': 1, 'totalContributions': 9, 'restrictedContributionsCount': 0},
             {'login': 'B', 'followers': 0, 'totalContributions': 25, 'restrictedContributionsCount': 20},
             {'login': 'C', 'followers': 2, 'totalContributions': 10, 'restrictedContributionsCount': 1}]}
         path = ranking.render_rankings(metadata)
+        self.assertNotIn('The final day was still in progress', path.read_text())
+        metadata['generatedAt'] = '2026-09-17T12:00:00Z'
+        path = ranking.render_rankings(metadata)
         old = path.read_bytes()
         text = old.decode()
+        self.assertIn('The final day was still in progress', text)
         visible, total = text.split('## Total')
         self.assertIn('## Visible to acquisition viewer', visible)
         self.assertNotIn('## Public', text)
