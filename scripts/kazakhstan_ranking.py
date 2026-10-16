@@ -84,14 +84,18 @@ def api(query, variables):
     return data
 
 
-def fetch_users(logins, period):
-    users, missing = {}, []
+def cached_users(logins, period):
+    users = {}
     for login in logins:
         user = read_cache(cache_key(['user-v1', login.lower(), period]), contribution_ttl(period))
-        if user is None:
-            missing.append(login)
-        else:
+        if user is not None:
             users[login.lower()] = user
+    return users
+
+
+def fetch_users(logins, period):
+    users = cached_users(logins, period)
+    missing = [login for login in logins if login.lower() not in users]
     if not missing:
         return users
     fields = '\n'.join(f'u{i}: user(login: {json.dumps(login)}) {{ {FIELDS} }}'
@@ -325,13 +329,20 @@ def main():
         logins.append('PhysShell')
     profiles, users = users, {}
 
-    def fetch_batch(batch):
-        for login, user in fetch_users(batch, period).items():
+    def add_users(fetched):
+        for login, user in fetched.items():
             users[login] = {**user, **profiles.get(login, {})}
-        print(f'Contributions fetched: {len(users)}/{len(logins)}', flush=True)
 
-    for start in range(0, len(logins), 20):
-        fetch_batch(logins[start:start + 20])
+    add_users(cached_users(logins, period))
+    missing = [login for login in logins if login.lower() not in users]
+    print(f'Contributions cached: {len(users)}/{len(logins)}; to fetch: {len(missing)}', flush=True)
+    fetching_started = time.monotonic()
+    for start in range(0, len(missing), 20):
+        add_users(fetch_users(missing[start:start + 20], period))
+        completed = min(start + 20, len(missing))
+        elapsed = time.monotonic() - fetching_started
+        eta = datetime.timedelta(seconds=round(elapsed * (len(missing) - completed) / completed))
+        print(f'Contributions fetched: {len(users)}/{len(logins)}; ETA ~{eta}', flush=True)
     target = users.get('physshell')
     if not target:
         raise RuntimeError('PhysShell missing')

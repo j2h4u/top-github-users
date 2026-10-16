@@ -53,6 +53,10 @@ Cache entries are separated by a hash of the credential because restricted count
 depend on the viewer. Tokens are never stored in the cache; rotating credentials
 starts a separate cache namespace. Keep the database local.
 
+Progress reports include an approximate ETA based on elapsed collection time and
+the number of accounts still requiring requests. Accounts loaded from cache are
+excluded from the rate estimate; retries and throttling can change it.
+
 Run cache checks with `python3 -m unittest discover -s scripts -p 'test_*.py'`.
 
 Network requests are sequential, with no fixed delay after successful requests.

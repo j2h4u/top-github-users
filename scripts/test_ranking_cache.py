@@ -29,7 +29,7 @@ class CacheTest(unittest.TestCase):
                 search = {'search': {'userCount': 1, 'nodes': [profile], 'pageInfo': {'hasNextPage': False}}}
                 user = {**profile, 'contributionsCollection': {'contributionCalendar': {'totalContributions': 12},
                                                              'restrictedContributionsCount': 3}}
-                with patch.object(ranking, 'api', return_value=search), patch.object(ranking, 'fetch_users', return_value={'physshell': user}), patch('builtins.print'):
+                with patch.object(ranking, 'api', return_value=search), patch.object(ranking, 'cached_users', return_value={}), patch.object(ranking, 'fetch_users', return_value={'physshell': user}), patch('builtins.print'):
                     with patch('sys.argv', ['ranking', '--from', '2025-09-17', '--to', '2026-09-17']):
                         ranking.main()
                     saved = {p: p.read_bytes() for p in Path('results').rglob('*') if p.is_file()}
@@ -43,6 +43,27 @@ class CacheTest(unittest.TestCase):
                     self.assertNotIn('publicContributions', entry)
                     self.assertEqual(entry['totalContributions'], 12)
                     self.assertEqual(entry['restrictedContributionsCount'], 3)
+            finally:
+                os.chdir(previous)
+
+    def test_eta_uses_only_accounts_missing_from_cache(self):
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as directory:
+            os.chdir(directory)
+            try:
+                Path('config.json').write_text(json.dumps({'locations': [{'country': 'Kazakhstan', 'cities': []}]}))
+                profiles = [{'login': login, 'followers': {'totalCount': 1}} for login in ['PhysShell', *[f'u{i}' for i in range(60)]]]
+                records = {u['login'].lower(): {**u, 'contributionsCollection': {
+                    'contributionCalendar': {'totalContributions': 12}, 'restrictedContributionsCount': 3}} for u in profiles}
+                search = {'search': {'userCount': 61, 'nodes': profiles, 'pageInfo': {'hasNextPage': False}}}
+                cached = dict(list(records.items())[:20])
+                def fetch(batch, period):
+                    return {login.lower(): records[login.lower()] for login in batch}
+                with patch.object(ranking, 'api', return_value=search), patch.object(ranking, 'cached_users', return_value=cached), patch.object(ranking, 'fetch_users', side_effect=fetch) as fetching:
+                    with patch('sys.argv', ['ranking', '--from', '2025-10-16', '--to', '2026-10-16']), patch.object(ranking.time, 'monotonic', side_effect=[0, 10, 10, 20, 30, 31, 31]), patch('builtins.print') as printing:
+                        ranking.main()
+                self.assertEqual([len(call.args[0]) for call in fetching.call_args_list], [20, 20, 1])
+                self.assertTrue(any('ETA ~0:00:10' in call.args[0] for call in printing.call_args_list))
             finally:
                 os.chdir(previous)
 
