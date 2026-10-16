@@ -122,12 +122,17 @@ def save_snapshot(metadata):
             UNION SELECT observation_id FROM members WHERE observation_id IS NOT NULL)''')
 
 
-def load_snapshots():
+def load_snapshots(period=None):
     # One read transaction keeps metadata and members from the same committed generation.
     with closing(connect()) as connection, connection:
         connection.execute('BEGIN')
         result = []
-        for identifier, start, end, generated, extra in connection.execute('SELECT * FROM snapshots ORDER BY period_from, period_to'):
+        query, parameters = 'SELECT * FROM snapshots', ()
+        if period is not None:
+            query += ' WHERE period_from=? AND period_to=?'
+            parameters = (period['from'], period['to'])
+        query += ' ORDER BY period_from, period_to'
+        for identifier, start, end, generated, extra in connection.execute(query, parameters):
             users, missing, unavailable = [], [], []
             provisional = False
             closed_at = (datetime.datetime.fromisoformat(end) + datetime.timedelta(days=1)).timestamp()

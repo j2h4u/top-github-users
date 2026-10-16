@@ -328,6 +328,37 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(users), 300)
         self.assertEqual(connection.call_count, 1)
 
+    def test_period_filter_reads_one_membership_and_project_still_renders_all(self):
+        alice = profile()
+        other = {**PERIOD, 'from': '2025-09-18T00:00:00Z'}
+        for period in (PERIOD, other):
+            with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):
+                users = ranking.fetch_users([alice], period)
+            store.save_snapshot(self.snapshot(list(users.values()), period))
+        all_snapshots = store.load_snapshots()
+        statements = []
+        connect = store.connect
+        def traced_connection():
+            connection = connect()
+            connection.set_trace_callback(statements.append)
+            return connection
+        with patch.object(store, 'connect', side_effect=traced_connection):
+            selected = store.load_snapshots(PERIOD)
+        self.assertEqual(selected, [all_snapshots[0]])
+        self.assertEqual(sum('FROM members m' in sql for sql in statements), 1)
+        self.assertEqual(store.load_snapshots({**PERIOD, 'from': '2025-09-19T00:00:00Z'}), [])
+        path = ranking.render_rankings(selected[0])
+        before = path.read_bytes()
+        with patch.dict(os.environ, {}, clear=True), patch('sys.argv', ['ranking', '--project']), \
+             patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')), patch('builtins.print'):
+            ranking.main()
+        self.assertEqual(path.read_bytes(), before)
+        self.assertTrue((ranking.result_directory(other) / 'contributions.md').is_file())
+        with patch.object(store, 'load_snapshots', wraps=store.load_snapshots) as loading, \
+             patch.object(ranking, 'collect_profiles', return_value=([alice], [])), patch('builtins.print'):
+            ranking.collect_ranking(PERIOD)
+        loading.assert_called_once_with(PERIOD)
+
     def test_offline_projector_and_writer_lock(self):
         alice = profile()
         with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):

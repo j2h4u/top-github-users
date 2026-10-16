@@ -360,7 +360,7 @@ def collect_ranking(period, expand=False):
         raise RuntimeError('Account names changed during collection; refresh the search before retrying')
     store.save_snapshot(metadata)
     # Project the committed database, never an uncommitted in-memory candidate.
-    saved = next(s for s in store.load_snapshots() if s['from'] == period['from'] and s['to'] == period['to'])
+    saved = store.load_snapshots(period)[0]
     path = render_rankings(saved)
     print(f'Completed in {time.monotonic() - started:.1f}s; report: {path}', flush=True)
 
