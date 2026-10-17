@@ -1,134 +1,130 @@
-# Kazakhstan contribution rankings
+# Kazakhstan GitHub contribution rankings
 
-This fork collects accounts found by the configured Kazakhstan/city location
-search and ranks their contributions in two ways: **visible to the acquisition
-viewer** and **total including disclosed restricted-detail counts**. These are
-contributions, not only commits. Equal counts share a rank.
+Find active GitHub users in Kazakhstan and compare their contributions over a
+chosen period. The project produces two rankings: visible contributions and
+total contributions, including activity with closed details.
 
-The first count is `totalContributions - restrictedContributionsCount`. It can
-include private activity visible to the authenticated reader, so it is not
-unconditionally labelled public. The total cannot include undisclosed activity.
-Neither ranking is a census of Kazakhstan. Locations and followers reflect
-collection time; historical profile settings are unavailable.
+**[View the latest rankings: 16 October 2025 — 16 October 2026](results/2025-10-16T000000Z--2026-10-16T000000Z/README.md)**
 
-Each completed collection creates a top-100 summary and two separate full
-rankings under `results/`.
-The authoritative data remains in the private SQLite database.
+The summary shows the top 100 in each ranking and links to the full lists.
 
-Latest report: [2025-10-16 through 2026-10-16](results/2025-10-16T000000Z--2026-10-16T000000Z/README.md).
+## What it offers
 
-## Collect locally
+- Search by country and city names in Russian, Kazakh and Latin spellings.
+- Collect beyond GitHub's first 1,000 search results.
+- Choose a date range of up to one calendar year and keep separate reports for each period.
+- Reuse saved counts, resume interrupted collections and see an estimated time remaining.
+- Expand the selection without downloading existing participants' counts again.
 
-Python 3.12 or later on Linux, with an authenticated GitHub CLI:
+## Run a collection
+
+Requirements: Linux, Python 3.12 or later, and an authenticated GitHub CLI (`gh`).
+Run commands from the repository root. The collector uses Python's standard
+library; no Python packages need installing.
 
 ```bash
-export GH_TOKEN="$(gh auth token)"
-python3 scripts/kazakhstan_ranking.py --from 2025-10-16 --to 2026-10-16
-unset GH_TOKEN
+GH_TOKEN="$(gh auth token)" python3 scripts/kazakhstan_ranking.py \
+  --from 2025-10-16 --to 2026-10-16
 ```
 
-Both dates are included, in UTC. GitHub's contribution calendar has day
-precision: timestamps are converted to UTC and then reduced to dates. A range
-can span at most one calendar year between its endpoints. The current day's
-counts are provisional and reused for one hour. After that day closes, a final
-observation must be fetched before its counts become reusable indefinitely.
-Closed periods have no arbitrary expiry; GitHub can still revise old activity after repository or visibility
-changes. Set `REFRESH_CACHE=true` to request new observations deliberately.
+Change the dates to collect another period. Existing reports for other periods
+remain available. Both dates are included, in UTC.
 
-To expand location coverage for an existing period without updating its saved
-counts, add `--expand` to the collection command. Existing snapshot counts are
-retained regardless of age; new accounts are fetched normally. Omit `--expand`
-when you want the normal freshness policy.
-Reports retain `counts_provisional: true` in their frontmatter until all used
-counts were acquired after the final UTC day ended, even when rebuilt later.
+## Update or expand the results
 
-All searches use `type:user` and split by followers/account creation dates to
-get past GitHub's 1,000-result cap. There is no truncated selection mode or
-mandatory extra account. Country, cities and multilingual `locationAliases` are in
-`config.json`. Location searches run in bounded groups and merge accounts by ID.
-`excludedLocationFragments` removes known foreign or non-geographic matches
-(such as Petropavlovsk-Kamchatsky and oral drug marketing). Missing or
-deleted accounts are recorded explicitly and the report is marked incomplete;
-valid accounts in the same response are retained. Other permanent errors fail
-the run. Completed batches survive interrupted runs. Progress includes an ETA
-based on accounts still requiring requests, excluding cached accounts.
+Run the collection command again to fetch missing or outdated counts. Completed
+batches are saved, so an interrupted run can continue.
 
-Requests are sequential, without a fixed delay on success. Rate limits honor
-`Retry-After` and quota reset headers, including GraphQL errors inside HTTP 200.
-Without server timing, secondary limits use bounded exponential backoff from
-one minute; transient HTTP/network/body-read failures use a shorter backoff.
+After changing the locations in [config.json](config.json), add `--expand` to
+keep the saved snapshot's counts and collect counts for new participants:
 
-## Storage and reports
+```bash
+GH_TOKEN="$(gh auth token)" python3 scripts/kazakhstan_ranking.py \
+  --from 2025-10-16 --to 2026-10-16 --expand
+```
 
-`data/rankings.sqlite3` is the private, durable source of truth, **not a
-disposable cache**. It holds observations, snapshot membership and metadata;
-only the two source counters are stored. Snapshots reference observations
-instead of duplicating counts. Search responses expire after one day.
+To deliberately request fresh counts and search results, use `REFRESH_CACHE=true`:
 
-Observations require stable GitHub IDs; renames reuse them, reused logins do
-not transfer another account's counts. Cache scopes are credential hashes
-because visibility depends on the reader; no token is saved. Old data without
-stable IDs was discarded. There is no legacy import or compatibility mode.
+```bash
+REFRESH_CACHE=true GH_TOKEN="$(gh auth token)" python3 scripts/kazakhstan_ranking.py \
+  --from 2025-10-16 --to 2026-10-16
+```
 
-Each period has three reports under `results/<from>--<to>/`: `README.md` shows
-the top 100 accounts in each ranking and links to `visible-full.md` and
-`total-full.md`. Full reports contain all accounts with a positive count in
-the respective metric and link back to the summary.
-
-Each report starts with YAML frontmatter for its period, snapshot completion time,
-account counts, selection/observer policies and completeness flags. Field names,
-types and order are defined by the shared
-[ReportFrontmatter schema](scripts/kazakhstan_ranking.py); generation checks field
-types and nonnegative counts. Dates and other strings are quoted, and flags are
-YAML booleans. Metadata is separate from the explanatory text and ranking tables.
-
-All three files are written and flushed before publication. Each file is replaced
-atomically, with the summary published last, after the snapshot commits. A failed
-database write leaves the old snapshot. If publication is interrupted, run
-`--project` to rebuild the reports from the committed database. Collection and projection take an
-exclusive local lock. Concurrent runs fail instead of interleaving writes.
-Different periods never replace one another.
-
-Rebuild every saved report offline, with no credential or network needed:
+To rebuild all saved reports from the local database, without GitHub or a token:
 
 ```bash
 python3 scripts/kazakhstan_ranking.py --project
 ```
 
-There is no JSON export. Only human-readable reports belong in Git or public
-artifacts. The database and its WAL files are Git-ignored and owner-readable;
-retain and back up the database across checkout/host replacement. For a
-consistent backup while SQLite is open, use its backup API rather than copying
-only the main file:
+## Read the rankings
 
-```bash
-python3 - <<'PY'
+- **Visible contributions** are the total minus contributions with closed details.
+  They can include private activity visible to the account used for collection.
+- **Total contributions** include the disclosed counts for activity with closed
+  details. Activity that a user does not disclose is unavailable.
+- Counts include all contribution types, not just commits. Equal counts share a
+  rank; followers and then username determine the order within a tie.
+- Full lists show accounts with a positive count in the respective ranking.
+
+Coverage depends on the locations users enter in their GitHub profiles and the
+configured spellings. Locations and follower counts reflect collection time.
+Contribution counts reflect when each account was queried. A report keeps its
+provisional status if any counts were collected before its final UTC day ended;
+rebuilding the report later does not make those counts final.
+
+Report parameters are stored in YAML frontmatter, following the shared
+[`ReportFrontmatter` schema](scripts/kazakhstan_ranking.py). `snapshot_complete`
+means every selected account was fetched; `counts_provisional` means some counts
+were collected before the final UTC day ended. Both can be true at once.
+
+## Data and backups
+
+Each period has three files under `results/<from>--<to>/`: a `README.md` summary,
+`visible-full.md` and `total-full.md`. Publish these Markdown reports.
+
+Keep `data/rankings.sqlite3`: it holds the saved counts and report membership.
+The database is private and Git-ignored. It lets you reuse results and rebuild
+reports without querying GitHub.
+
+Current-day counts are reused for one hour. Once the final day closes, new final
+counts must be collected before they can be reused indefinitely. Closed-period
+counts have no automatic expiry, though GitHub can revise old activity. Location
+search results are reused for one day. Changing credentials uses a separate cache
+because access to private activity can differ; tokens are never saved.
+
+Reports are prepared before publication and each file is replaced atomically,
+with the summary published last. Collection and report generation take an
+exclusive local lock. After an interrupted publication, run `--project` again.
+
+Use SQLite's backup API for a consistent backup while the database is open:
+
+```python
 import sqlite3
 from pathlib import Path
 from contextlib import closing
-destination = Path('/your/private/backup/rankings.sqlite3')
-destination.touch(mode=0o600, exist_ok=False)
+
+backup = Path('/your/private/backup/rankings.sqlite3')
+backup.touch(mode=0o600, exist_ok=False)
 with closing(sqlite3.connect('data/rankings.sqlite3')) as source:
-    with closing(sqlite3.connect(destination)) as target:
-        source.backup(target)
-PY
+    with closing(sqlite3.connect(backup)) as destination:
+        source.backup(destination)
 ```
 
-Keep the backup destination private. To restore, stop collectors/projectors,
-restore the consistent database at `data/rankings.sqlite3`, set permissions to
-`0600`, then run `--project`. Do not delete the database as a cleanup operation.
+To restore, stop collection and report generation, restore the database at
+`data/rankings.sqlite3`, set its permissions to `0600`, then run `--project`.
 
 ## Checks
 
-GitHub Actions runs tests only. Collection runs locally so the private database
-survives independently of an ephemeral CI runner. Commit only the intended
-period reports after a successful collection; a failed push never removes local
-observations or reports. No database or all-history artifact is uploaded.
+GitHub Actions runs tests. Collection runs locally so the private database stays
+available between runs. To run the checks locally:
 
 ```bash
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
+## Sources
+
+Based on [PhysShell/top-github-users](https://github.com/PhysShell/top-github-users).
 Source project: [gayanvoice/top-github-users](https://github.com/gayanvoice/top-github-users),
 generator: [gayanvoice/top-github-users-action](https://github.com/gayanvoice/top-github-users-action).
-Upstream cache data is distributed under [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
+Upstream data is distributed under [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
