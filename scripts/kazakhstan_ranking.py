@@ -206,10 +206,13 @@ def render_rankings(metadata):
         'Locations and followers reflect collection time.', '']
     if metadata.get('missingUsers'):
         lines += ['Unavailable accounts: ' + ', '.join(metadata['missingUsers']) + '.', '']
-    for metric, title in [('visibleContributions', label), ('totalContributions', 'Total')]:
+    summary, reports = list(lines), {}
+    for metric, title, filename in [('visibleContributions', label, 'visible-full.md'),
+                                    ('totalContributions', 'Total', 'total-full.md')]:
         ranking = sorted(metadata['users'], key=lambda u: (-contribution_count(u, metric), -u['followers'], u['login'].lower()))
-        lines += [f'## {title}', '', f'| Rank | User | {label} | Restricted detail | Total | Followers |',
-                  '| --- | --- | --- | --- | --- | --- |']
+        table = [f'| Rank | User | {label} | Restricted detail | Total | Followers |',
+                 '| --- | --- | --- | --- | --- | --- |']
+        rows = []
         previous = None
         for position, user in enumerate(ranking, 1):
             count = contribution_count(user, metric)
@@ -217,22 +220,34 @@ def render_rankings(metadata):
                 current_rank = position
             previous = count
             if count > 0:
-                lines.append(f'| {current_rank} | [{user["login"]}](https://github.com/{user["login"]}) | '
+                rows.append(f'| {current_rank} | [{user["login"]}](https://github.com/{user["login"]}) | '
                              f'{contribution_count(user, "visibleContributions")} | {user["restrictedContributionsCount"]} | '
                              f'{user["totalContributions"]} | {user["followers"]} |')
-        lines.append('')
+        summary += [f'## Top 100 — {title}', '',
+                    f'[Full ranking]({filename}) · {len(rows)} accounts with positive contributions.', '',
+                    *table, *rows[:100], '']
+        reports[filename] = '\n'.join([*lines, '[Back to top 100](README.md)', '', f'## {title}', '',
+                                       *table, *rows, ''])
+    # Publish the summary last, after both full tables have been prepared.
+    reports['README.md'] = '\n'.join(summary)
     directory = result_directory(metadata)
     directory.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=directory, delete=False) as output:
-        temporary = Path(output.name)
-        try:
-            output.write('\n'.join(lines))
-            output.flush()
-            os.fsync(output.fileno())
-            temporary.replace(directory / 'contributions.md')
-        finally:
+    prepared = {}
+    try:
+        for filename, content in reports.items():
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=directory, delete=False) as output:
+                temporary = Path(output.name)
+                prepared[filename] = temporary
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+        for filename, temporary in prepared.items():
+            temporary.replace(directory / filename)
+        (directory / 'contributions.md').unlink(missing_ok=True)
+    finally:
+        for temporary in prepared.values():
             temporary.unlink(missing_ok=True)
-    return directory / 'contributions.md'
+    return directory / 'README.md'
 
 def parse_period(arguments=None):
     parser = argparse.ArgumentParser(description=__doc__)

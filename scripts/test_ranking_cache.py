@@ -123,7 +123,7 @@ class StoreTest(unittest.TestCase):
         users = {u['id']: u for u in saved['users']}
         self.assertEqual((users['ID-A']['login'], users['ID-A']['totalContributions']), ('NewName', 12))
         self.assertEqual((users['ID-B']['login'], users['ID-B']['totalContributions']), ('OldName', 20))
-        text = (ranking.result_directory(PERIOD) / 'contributions.md').read_text()
+        text = (ranking.result_directory(PERIOD) / 'README.md').read_text()
         self.assertIn('[NewName](https://github.com/NewName)', text)
         with patch.object(ranking, 'fetch_api', side_effect=AssertionError('cached')):
             cached = ranking.fetch_users([profile('NewName'), profile('OldName', 'ID-B')], PERIOD)
@@ -242,7 +242,7 @@ class StoreTest(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True), patch('sys.argv', ['ranking', '--project']), \
              patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')), patch('builtins.print'):
             ranking.main()
-        report = ranking.result_directory(PERIOD) / 'contributions.md'
+        report = ranking.result_directory(PERIOD) / 'README.md'
         self.assertIn('Some counts were collected before', report.read_text())
         with patch.object(store.time, 'time', return_value=closed_at), \
              patch.dict(os.environ, {'REFRESH_CACHE': 'true'}), \
@@ -297,23 +297,75 @@ class StoreTest(unittest.TestCase):
         old = path.read_bytes()
         text = old.decode()
         self.assertIn('Some counts were collected before', text)
-        visible, total = text.split('## Total')
-        self.assertIn('## Visible to acquisition viewer', visible)
+        visible, total = text.split('## Top 100 — Total')
+        self.assertIn('## Top 100 — Visible to acquisition viewer', visible)
         self.assertNotIn('## Public', text)
         self.assertIn('| 1 | [A]', visible)
         self.assertIn('| 1 | [C]', visible)
         self.assertIn('| 3 | [B]', visible)
         self.assertIn('| 1 | [B]', total)
+        before = {p.name: p.read_bytes() for p in path.parent.iterdir()}
         metadata['users'][0]['totalContributions'] = 99
-        with patch.object(ranking.os, 'fsync', side_effect=OSError('disk full')):
+        with patch.object(ranking.os, 'fsync', side_effect=[None, None, OSError('disk full')]):
             with self.assertRaises(OSError):
                 ranking.render_rankings(metadata)
-        self.assertEqual(path.read_bytes(), old)
-        self.assertEqual(list(path.parent.iterdir()), [path])
+        self.assertEqual({p.name: p.read_bytes() for p in path.parent.iterdir()}, before)
         metadata['users'][0]['restrictedContributionsCount'] = 999
         with self.assertRaises(ValueError):
             ranking.render_rankings(metadata)
         self.assertEqual(path.read_bytes(), old)
+
+    def test_summary_limits_each_ranking_to_100_and_links_to_complete_tables(self):
+        users = [{'login': f'u{i}', 'followers': 0, 'totalContributions': i + 1,
+                  'restrictedContributionsCount': 0 if i < 65 else i} for i in range(130)]
+        users += [{'login': 'Zero', 'followers': 0, 'totalContributions': 0, 'restrictedContributionsCount': 0},
+                  {'login': 'RestrictedOnly', 'followers': 0, 'totalContributions': 50, 'restrictedContributionsCount': 50}]
+        metadata = {**self.snapshot([]), 'countsProvisional': False, 'users': users}
+        directory = ranking.result_directory(metadata)
+        directory.mkdir(parents=True)
+        (directory / 'contributions.md').write_text('old combined report')
+        path = ranking.render_rankings(metadata)
+        self.assertEqual(path.name, 'README.md')
+        self.assertEqual({p.name for p in directory.iterdir()}, {'README.md', 'visible-full.md', 'total-full.md'})
+        summary = path.read_text()
+        sections = summary.split('## Top 100 — ')[1:]
+        self.assertEqual(len(sections), 2)
+        for section, filename, expected in zip(sections, ('visible-full.md', 'total-full.md'), (130, 131)):
+            full = (directory / filename).read_text()
+            short_rows = [line for line in section.splitlines() if line.startswith('| ')][2:]
+            full_rows = [line for line in full.splitlines() if line.startswith('| ')][2:]
+            self.assertEqual(len(full_rows), expected)
+            self.assertEqual(short_rows, full_rows[:100])
+            self.assertIn(f'[Full ranking]({filename})', section)
+            self.assertIn('[Back to top 100](README.md)', full)
+            self.assertNotIn('[Zero]', full)
+        self.assertNotIn('[RestrictedOnly]', (directory / 'visible-full.md').read_text())
+        self.assertIn('[RestrictedOnly]', (directory / 'total-full.md').read_text())
+
+    def test_interrupted_publication_keeps_summary_and_reprojection_recovers(self):
+        metadata = {**self.snapshot([]), 'countsProvisional': False, 'users': [
+            {'login': 'Alice', 'followers': 0, 'totalContributions': 12, 'restrictedContributionsCount': 3}]}
+        path = ranking.render_rankings(metadata)
+        previous = path.read_bytes()
+        legacy = path.parent / 'contributions.md'
+        legacy.write_text('old combined report')
+        metadata['users'][0]['totalContributions'] = 99
+        replace = Path.replace
+        def interrupted(source, target):
+            if target.name == 'total-full.md':
+                raise OSError('interrupted publication')
+            return replace(source, target)
+        with patch.object(Path, 'replace', new=interrupted), self.assertRaises(OSError):
+            ranking.render_rankings(metadata)
+        self.assertEqual(path.read_bytes(), previous)
+        self.assertTrue(legacy.exists())
+        self.assertEqual({p.name for p in path.parent.iterdir()},
+                         {'README.md', 'visible-full.md', 'total-full.md', 'contributions.md'})
+        ranking.render_rankings(metadata)
+        self.assertFalse(legacy.exists())
+        self.assertNotEqual(path.read_bytes(), previous)
+        for filename in ('README.md', 'visible-full.md', 'total-full.md'):
+            self.assertIn('| 99 |', (path.parent / filename).read_text())
 
     def test_bulk_cached_reads_use_one_connection(self):
         profiles = [profile(f'u{i}', f'ID-{i}') for i in range(300)]
@@ -353,7 +405,7 @@ class StoreTest(unittest.TestCase):
              patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')), patch('builtins.print'):
             ranking.main()
         self.assertEqual(path.read_bytes(), before)
-        self.assertTrue((ranking.result_directory(other) / 'contributions.md').is_file())
+        self.assertTrue((ranking.result_directory(other) / 'README.md').is_file())
         with patch.object(store, 'load_snapshots', wraps=store.load_snapshots) as loading, \
              patch.object(ranking, 'collect_profiles', return_value=([alice], [])), patch('builtins.print'):
             ranking.collect_ranking(PERIOD)
@@ -409,7 +461,7 @@ class StoreTest(unittest.TestCase):
         saved = store.load_snapshots()[0]
         self.assertEqual(len(saved['users']), 40)
         self.assertEqual(saved['missingUsers'], ['u0'])
-        report = (ranking.result_directory(saved) / 'contributions.md').read_text()
+        report = (ranking.result_directory(saved) / 'README.md').read_text()
         self.assertIn('snapshot incomplete', report)
 
 

@@ -11,10 +11,11 @@ unconditionally labelled public. The total cannot include undisclosed activity.
 Neither ranking is a census of Kazakhstan. Locations and followers reflect
 collection time; historical profile settings are unavailable.
 
-Each completed collection creates one report with both tables under `results/`.
+Each completed collection creates a top-100 summary and two separate full
+rankings under `results/`.
 The authoritative data remains in the private SQLite database.
 
-Latest report: [2025-10-16 through 2026-10-16](results/2025-10-16T000000Z--2026-10-16T000000Z/contributions.md).
+Latest report: [2025-10-16 through 2026-10-16](results/2025-10-16T000000Z--2026-10-16T000000Z/README.md).
 
 ## Collect locally
 
@@ -69,10 +70,15 @@ not transfer another account's counts. Cache scopes are credential hashes
 because visibility depends on the reader; no token is saved. Old data without
 stable IDs was discarded. There is no legacy import or compatibility mode.
 
-Each period has one `results/<from>--<to>/contributions.md` report containing both
-rankings. Publication is a single atomic replacement after the snapshot commits.
-A failed database write leaves the old snapshot; a failed projection leaves the
-previous report, which can be regenerated. Collection and projection take an
+Each period has three reports under `results/<from>--<to>/`: `README.md` shows
+the top 100 accounts in each ranking and links to `visible-full.md` and
+`total-full.md`. Full reports contain all accounts with a positive count in
+the respective metric and link back to the summary.
+
+All three files are written and flushed before publication. Each file is replaced
+atomically, with the summary published last, after the snapshot commits. A failed
+database write leaves the old snapshot. If publication is interrupted, run
+`--project` to rebuild the reports from the committed database. Collection and projection take an
 exclusive local lock. Concurrent runs fail instead of interleaving writes.
 Different periods never replace one another.
 
@@ -109,7 +115,7 @@ restore the consistent database at `data/rankings.sqlite3`, set permissions to
 
 GitHub Actions runs tests only. Collection runs locally so the private database
 survives independently of an ephemeral CI runner. Commit only the intended
-period report after a successful collection; a failed push never removes local
+period reports after a successful collection; a failed push never removes local
 observations or reports. No database or all-history artifact is uploaded.
 
 ```bash
