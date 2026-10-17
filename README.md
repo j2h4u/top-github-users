@@ -4,9 +4,11 @@ Find active GitHub users in Kazakhstan and compare their contributions over a
 chosen period. The project produces two rankings: visible contributions and
 total contributions, including activity with closed details.
 
-**[View the latest rankings: 16 October 2025 — 16 October 2026](results/2025-10-16T000000Z--2026-10-16T000000Z/README.md)**
+**[View the latest rankings: 17 October 2025 — 17 October 2026](results/2025-10-17T000000Z--2026-10-17T000000Z/README.md)**
 
 The summary shows the top 100 in each ranking and links to the full lists.
+
+[Previous period: 16 October 2025 — 16 October 2026](results/2025-10-16T000000Z--2026-10-16T000000Z/README.md)
 
 ## What it offers
 
