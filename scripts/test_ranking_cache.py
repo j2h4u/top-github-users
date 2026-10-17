@@ -346,7 +346,6 @@ class StoreTest(unittest.TestCase):
     def test_frontmatter_schema_round_trips_metadata_and_rejects_wrong_types(self):
         metadata = self.snapshot([{**profile(), 'totalContributions': 12, 'restrictedContributionsCount': 3}],
                                  countsProvisional=True, missingUsers=['Bob'])
-        metadata['selectionMode'] = 'full-location-search: "Қазақстан"\nsecond line'
         path = ranking.render_rankings(metadata)
         headers = []
         for filename in ('README.md', 'visible-full.md', 'total-full.md'):
@@ -357,18 +356,18 @@ class StoreTest(unittest.TestCase):
             self.assertEqual(set(values), {field.name for field in fields(ranking.ReportFrontmatter)})
             self.assertEqual(values, {
                 'period_start': PERIOD['from'], 'period_end': PERIOD['to'],
-                'snapshot_completed': metadata['generatedAt'], 'accounts_fetched': 1,
-                'selection_mode': metadata['selectionMode'], 'observer_policy': 'authenticated-viewer',
-                'timezone': 'UTC', 'dates_inclusive': True, 'counts_provisional': True,
-                'counts_timing': 'individual acquisition times', 'unavailable_accounts': 1,
-                'snapshot_complete': False})
+                'snapshot_completed': datetime.datetime.fromisoformat(metadata['generatedAt']).isoformat(timespec='seconds'),
+                'accounts_fetched': 1, 'counts_provisional': True, 'unavailable_accounts': 1})
             self.assertTrue(body.startswith('\n# Kazakhstan contribution rankings'))
+            self.assertIn('Both UTC dates are included. Counts reflect when each account was queried.', body)
             self.assertNotIn('Snapshot completed:', body)
             self.assertNotIn('Selection mode:', body)
             headers.append(header)
         self.assertEqual(len(set(headers)), 1)
         parameters = ranking.ReportFrontmatter(**values)
-        for invalid in ({'accounts_fetched': True}, {'dates_inclusive': 'true'}, {'snapshot_completed': None}):
+        special = 'period: "Қазақстан"\nsecond line'
+        self.assertEqual(json.loads(replace(parameters, period_start=special).to_lines()[1].split(': ', 1)[1]), special)
+        for invalid in ({'accounts_fetched': True}, {'counts_provisional': 'true'}, {'snapshot_completed': None}):
             with self.assertRaises(TypeError):
                 replace(parameters, **invalid).to_lines()
         with self.assertRaises(ValueError):
@@ -494,7 +493,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(saved['users']), 40)
         self.assertEqual(saved['missingUsers'], ['u0'])
         report = (ranking.result_directory(saved) / 'README.md').read_text()
-        self.assertIn('snapshot_complete: false', report)
+        self.assertIn('unavailable_accounts: 1', report)
 
 
 if __name__ == '__main__':

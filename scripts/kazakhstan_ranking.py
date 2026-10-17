@@ -192,14 +192,8 @@ class ReportFrontmatter:
     period_end: str
     snapshot_completed: str
     accounts_fetched: int
-    selection_mode: str
-    observer_policy: str
-    timezone: str
-    dates_inclusive: bool
     counts_provisional: bool
-    counts_timing: str
     unavailable_accounts: int
-    snapshot_complete: bool
 
     def to_lines(self) -> list[str]:
         lines = ['---']
@@ -219,12 +213,12 @@ def render_rankings(metadata):
         store.validate_counts(user['totalContributions'], user['restrictedContributionsCount'])
     label = 'Visible to acquisition viewer'
     parameters = ReportFrontmatter(
-        period_start=metadata['from'], period_end=metadata['to'], snapshot_completed=metadata['generatedAt'],
-        accounts_fetched=len(metadata['users']), selection_mode=metadata['selectionMode'],
-        observer_policy=metadata['observerPolicy'], timezone='UTC', dates_inclusive=True,
-        counts_provisional=metadata['countsProvisional'], counts_timing='individual acquisition times',
-        unavailable_accounts=len(metadata.get('missingUsers', [])), snapshot_complete=not metadata.get('missingUsers'))
+        period_start=metadata['from'], period_end=metadata['to'],
+        snapshot_completed=datetime.datetime.fromisoformat(metadata['generatedAt']).isoformat(timespec='seconds'),
+        accounts_fetched=len(metadata['users']), counts_provisional=metadata['countsProvisional'],
+        unavailable_accounts=len(metadata.get('missingUsers', [])))
     lines = [*parameters.to_lines(), '# Kazakhstan contribution rankings', '',
+        'Both UTC dates are included. Counts reflect when each account was queried.',
         'Equal contribution counts share a rank. Counts are contributions, not only commits.',
         'Coverage is configured GitHub location search, not a census of Kazakhstan.',
         'The first metric is total minus restricted-detail counts. With an unrestricted or unknown observer, it may include private activity visible to that observer.',

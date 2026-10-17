@@ -1,20 +1,15 @@
 ---
 period_start: "2025-10-16T00:00:00Z"
 period_end: "2026-10-16T00:00:00Z"
-snapshot_completed: "2026-10-16T21:09:48.383511+00:00"
+snapshot_completed: "2026-10-16T21:09:48+00:00"
 accounts_fetched: 17878
-selection_mode: "full-location-search"
-observer_policy: "authenticated-viewer"
-timezone: "UTC"
-dates_inclusive: true
 counts_provisional: true
-counts_timing: "individual acquisition times"
 unavailable_accounts: 0
-snapshot_complete: true
 ---
 
 # Kazakhstan contribution rankings
 
+Both UTC dates are included. Counts reflect when each account was queried.
 Equal contribution counts share a rank. Counts are contributions, not only commits.
 Coverage is configured GitHub location search, not a census of Kazakhstan.
 The first metric is total minus restricted-detail counts. With an unrestricted or unknown observer, it may include private activity visible to that observer.
