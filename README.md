@@ -73,9 +73,9 @@ provisional status if any counts were collected before its final UTC day ended;
 rebuilding the report later does not make those counts final.
 
 Report parameters are stored in YAML frontmatter, following the shared
-[`ReportFrontmatter` schema](scripts/kazakhstan_ranking.py). `unavailable_accounts`
-counts selected accounts that could not be fetched; `counts_provisional` means
-some counts were collected before the final UTC day ended.
+[`ReportFrontmatter` schema](scripts/kazakhstan_ranking.py). **Accounts unavailable**
+counts selected accounts that could not be fetched. **Last day may be incomplete**
+is **Yes** when some counts were collected before the final UTC day ended.
 
 ## Data and backups
 

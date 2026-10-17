@@ -1,7 +1,7 @@
 """Contribution rankings for inclusive UTC calendar dates; standard library only."""
 import argparse
 from contextlib import closing
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 import datetime
 import hashlib
 import fcntl
@@ -188,12 +188,12 @@ def result_directory(period):
 
 @dataclass(frozen=True)
 class ReportFrontmatter:
-    period_start: str
-    period_end: str
-    snapshot_completed: str
-    accounts_fetched: int
-    counts_provisional: bool
-    unavailable_accounts: int
+    period_start: str = field(metadata={'label': 'Period start'})
+    period_end: str = field(metadata={'label': 'Period end'})
+    snapshot_completed: str = field(metadata={'label': 'Collection completed'})
+    accounts_fetched: int = field(metadata={'label': 'Accounts included'})
+    counts_provisional: bool = field(metadata={'label': 'Last day may be incomplete'})
+    unavailable_accounts: int = field(metadata={'label': 'Accounts unavailable'})
 
     def to_lines(self) -> list[str]:
         lines = ['---']
@@ -204,7 +204,9 @@ class ReportFrontmatter:
             if field.type is int and value < 0:
                 raise ValueError(f'Invalid frontmatter field {field.name}: expected a nonnegative count')
             # JSON scalars are valid YAML and safely quote timestamps and special characters.
-            lines.append(f'{field.name}: {json.dumps(value, ensure_ascii=False)}')
+            if field.type is bool:
+                value = 'Yes' if value else 'No'
+            lines.append(f'{field.metadata["label"]}: {json.dumps(value, ensure_ascii=False)}')
         return [*lines, '---', '']
 
 
@@ -213,8 +215,10 @@ def render_rankings(metadata):
         store.validate_counts(user['totalContributions'], user['restrictedContributionsCount'])
     label = 'Visible to acquisition viewer'
     parameters = ReportFrontmatter(
-        period_start=metadata['from'], period_end=metadata['to'],
-        snapshot_completed=datetime.datetime.fromisoformat(metadata['generatedAt']).isoformat(timespec='seconds'),
+        period_start=datetime.datetime.fromisoformat(metadata['from']).date().isoformat(),
+        period_end=datetime.datetime.fromisoformat(metadata['to']).date().isoformat(),
+        snapshot_completed=datetime.datetime.fromisoformat(metadata['generatedAt']).astimezone(
+            datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
         accounts_fetched=len(metadata['users']), counts_provisional=metadata['countsProvisional'],
         unavailable_accounts=len(metadata.get('missingUsers', [])))
     lines = [*parameters.to_lines(), '# Kazakhstan contribution rankings', '',

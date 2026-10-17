@@ -244,7 +244,7 @@ class StoreTest(unittest.TestCase):
              patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')), patch('builtins.print'):
             ranking.main()
         report = ranking.result_directory(PERIOD) / 'README.md'
-        self.assertIn('counts_provisional: true', report.read_text())
+        self.assertIn('Last day may be incomplete: "Yes"', report.read_text())
         with patch.object(store.time, 'time', return_value=closed_at), \
              patch.dict(os.environ, {'REFRESH_CACHE': 'true'}), \
              patch.object(ranking, 'collect_profiles', return_value=([alice, bob], [])), \
@@ -252,7 +252,7 @@ class StoreTest(unittest.TestCase):
              patch('builtins.print'):
             ranking.collect_ranking(PERIOD)
         self.assertFalse(store.load_snapshots()[0]['countsProvisional'])
-        self.assertIn('counts_provisional: false', report.read_text())
+        self.assertIn('Last day may be incomplete: "No"', report.read_text())
 
     def test_refresh_preserves_ready_snapshot_then_removes_old_observation(self):
         alice = profile()
@@ -291,13 +291,13 @@ class StoreTest(unittest.TestCase):
             {'login': 'B', 'followers': 0, 'totalContributions': 25, 'restrictedContributionsCount': 20},
             {'login': 'C', 'followers': 2, 'totalContributions': 10, 'restrictedContributionsCount': 1}]}
         path = ranking.render_rankings(metadata)
-        self.assertIn('counts_provisional: false', path.read_text())
+        self.assertIn('Last day may be incomplete: "No"', path.read_text())
         metadata['generatedAt'] = '2026-09-17T12:00:00Z'
         metadata['countsProvisional'] = True
         path = ranking.render_rankings(metadata)
         old = path.read_bytes()
         text = old.decode()
-        self.assertIn('counts_provisional: true', text)
+        self.assertIn('Last day may be incomplete: "Yes"', text)
         visible, total = text.split('## Top 100 — Total')
         self.assertIn('## Top 100 — Visible to acquisition viewer', visible)
         self.assertNotIn('## Public', text)
@@ -353,18 +353,21 @@ class StoreTest(unittest.TestCase):
             self.assertEqual(prefix, '')
             values = {key: json.loads(value) for key, value in
                       (line.split(': ', 1) for line in header.splitlines())}
-            self.assertEqual(set(values), {field.name for field in fields(ranking.ReportFrontmatter)})
+            self.assertEqual(set(values), {field.metadata["label"] for field in fields(ranking.ReportFrontmatter)})
             self.assertEqual(values, {
-                'period_start': PERIOD['from'], 'period_end': PERIOD['to'],
-                'snapshot_completed': datetime.datetime.fromisoformat(metadata['generatedAt']).isoformat(timespec='seconds'),
-                'accounts_fetched': 1, 'counts_provisional': True, 'unavailable_accounts': 1})
+                'Period start': PERIOD['from'][:10], 'Period end': PERIOD['to'][:10],
+                'Collection completed': datetime.datetime.fromisoformat(metadata['generatedAt']).astimezone(
+                    datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
+                'Accounts included': 1, 'Last day may be incomplete': 'Yes', 'Accounts unavailable': 1})
             self.assertTrue(body.startswith('\n# Kazakhstan contribution rankings'))
             self.assertIn('Both UTC dates are included. Counts reflect when each account was queried.', body)
             self.assertNotIn('Snapshot completed:', body)
             self.assertNotIn('Selection mode:', body)
             headers.append(header)
         self.assertEqual(len(set(headers)), 1)
-        parameters = ranking.ReportFrontmatter(**values)
+        parameters = ranking.ReportFrontmatter(**{
+            field.name: True if field.type is bool else values[field.metadata['label']]
+            for field in fields(ranking.ReportFrontmatter)})
         special = 'period: "Қазақстан"\nsecond line'
         self.assertEqual(json.loads(replace(parameters, period_start=special).to_lines()[1].split(': ', 1)[1]), special)
         for invalid in ({'accounts_fetched': True}, {'counts_provisional': 'true'}, {'snapshot_completed': None}):
@@ -493,7 +496,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(saved['users']), 40)
         self.assertEqual(saved['missingUsers'], ['u0'])
         report = (ranking.result_directory(saved) / 'README.md').read_text()
-        self.assertIn('unavailable_accounts: 1', report)
+        self.assertIn('Accounts unavailable: 1', report)
 
 
 if __name__ == '__main__':

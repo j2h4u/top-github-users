@@ -1,10 +1,10 @@
 ---
-period_start: "2025-10-16T00:00:00Z"
-period_end: "2026-10-16T00:00:00Z"
-snapshot_completed: "2026-10-16T21:09:48+00:00"
-accounts_fetched: 17878
-counts_provisional: true
-unavailable_accounts: 0
+Period start: "2025-10-16"
+Period end: "2026-10-16"
+Collection completed: "2026-10-16 21:09:48 UTC"
+Accounts included: 17878
+Last day may be incomplete: "Yes"
+Accounts unavailable: 0
 ---
 
 # Kazakhstan contribution rankings
