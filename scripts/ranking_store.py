@@ -1,23 +1,31 @@
 """Private durable observations and complete report snapshots."""
-from contextlib import closing
-import datetime
+
 import json
-from pathlib import Path
 import sqlite3
 import time
+from contextlib import closing
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import cast
 
-DATABASE = Path('data/rankings.sqlite3')
+from ranking_types import ApiUser, ObservedUser, Period, Profile, RankingUser, SnapshotMetadata, UnavailableUser
+
+DATABASE = Path("data/rankings.sqlite3")
+
+ObservationRow = tuple[int, str, float, int, int, str]
+SnapshotObservationRow = tuple[int, int, str, str, str]
+MemberRow = tuple[str, str, str, int | None, int | None, str | None, float | None]
 
 
-def connect():
+def connect() -> sqlite3.Connection:
     DATABASE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if not DATABASE.exists():
         DATABASE.touch(mode=0o600, exist_ok=True)
     DATABASE.chmod(0o600)
     connection = sqlite3.connect(DATABASE, timeout=30)
-    connection.execute('PRAGMA foreign_keys=ON')
-    connection.execute('PRAGMA journal_mode=WAL')
-    connection.executescript('''
+    connection.execute("PRAGMA foreign_keys=ON")
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.executescript("""
         CREATE TABLE IF NOT EXISTS responses (
             key TEXT PRIMARY KEY, fetched_at REAL NOT NULL, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS observations (
@@ -38,119 +46,222 @@ def connect():
             status TEXT NOT NULL CHECK(status IN ('ok', 'unavailable')),
             PRIMARY KEY(snapshot_id, login), UNIQUE(snapshot_id, position),
             CHECK((status = 'ok') = (observation_id IS NOT NULL)));
-    ''')
+    """)
     return connection
 
 
-def validate_counts(total, restricted):
+def validate_counts(total: int, restricted: int) -> None:
     if type(total) is not int or type(restricted) is not int or not 0 <= restricted <= total:
-        raise ValueError('Inconsistent contribution counts')
+        raise ValueError("Inconsistent contribution counts")
 
 
-def save_observations(scope, period, users):
-    saved = {}
+def save_observations(scope: str, period: Period, users: list[ApiUser]) -> dict[str, int]:
+    saved: dict[str, int] = {}
     with closing(connect()) as connection, connection:
         for user in users:
-            counts = user['contributionsCollection']
-            total = counts['contributionCalendar']['totalContributions']
-            restricted = counts['restrictedContributionsCount']
+            counts = user["contributionsCollection"]
+            total = counts["contributionCalendar"]["totalContributions"]
+            restricted = counts["restrictedContributionsCount"]
             validate_counts(total, restricted)
-            cursor = connection.execute('''INSERT INTO observations
+            cursor = connection.execute(
+                """INSERT INTO observations
                 (scope, user_id, login, period_from, period_to, fetched_at, total, restricted)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-                (scope, user['id'], user['login'], period['from'], period['to'], time.time(), total, restricted))
-            saved[user['id']] = cursor.lastrowid
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (scope, user["id"], user["login"], period["from"], period["to"], time.time(), total, restricted),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite did not return the saved observation ID")
+            saved[user["id"]] = cursor.lastrowid
     return saved
 
 
-def cached_observations(scope, profiles, period, ttl, refresh=False, reuse_snapshot=False):
-    if refresh:
-        return {}
-    identifiers = [profile['id'] for profile in profiles]
-    rows = []
-    snapshot_filter = 'AND id IN (SELECT observation_id FROM members)' if reuse_snapshot else ''
+def cached_observations(
+    scope: str,
+    profiles: list[Profile],
+    period: Period,
+    ttl: float | None,
+    *,
+    reuse_snapshot: bool = False,
+) -> dict[str, ObservedUser]:
+    identifiers = [profile["id"] for profile in profiles]
+    rows: list[ObservationRow] = []
+    snapshot_filter = "AND id IN (SELECT observation_id FROM members)" if reuse_snapshot else ""
     with closing(connect()) as connection:
         batch_size = connection.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER) - 3
         for start in range(0, len(identifiers), batch_size):
-            batch = identifiers[start:start + batch_size]
-            placeholders = ','.join('?' for _ in batch)
-            rows.extend(connection.execute(f'''SELECT id, user_id, fetched_at, total, restricted, login
+            batch = identifiers[start : start + batch_size]
+            placeholders = ",".join("?" for _ in batch)
+            batch_rows = connection.execute(
+                f"""SELECT id, user_id, fetched_at, total, restricted, login
                 FROM observations WHERE scope=? AND period_from=? AND period_to=?
-                AND user_id IN ({placeholders}) {snapshot_filter} ORDER BY fetched_at, id''',
-                (scope, period['from'], period['to'], *batch)).fetchall())
-    closed_at = (datetime.datetime.fromisoformat(period['to']).replace(hour=0, minute=0, second=0, microsecond=0)
-                 + datetime.timedelta(days=1)).timestamp()
+                AND user_id IN ({placeholders}) {snapshot_filter} ORDER BY fetched_at, id""",
+                (scope, period["from"], period["to"], *batch),
+            ).fetchall()
+            rows.extend(cast(list[ObservationRow], batch_rows))
+    closed_at = (
+        datetime.fromisoformat(period["to"]).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    ).timestamp()
     now = time.time()
-    by_id = {user_id: (identifier, total, restricted, login, fetched)
-             for identifier, user_id, fetched, total, restricted, login in rows
-             if reuse_snapshot or (0 <= now - fetched and (fetched >= closed_at if ttl is None else now - fetched < ttl))}
-    return {profile['login'].lower(): {**profile,
-                'login': by_id[profile['id']][3] if by_id[profile['id']][4] > profile.get('_profileFetchedAt', now)
-                         else profile['login'],
-                '_observation': by_id[profile['id']][0],
-                'totalContributions': by_id[profile['id']][1], 'restrictedContributionsCount': by_id[profile['id']][2]}
-            for profile in profiles if profile['id'] in by_id}
+    by_id = {
+        user_id: (identifier, total, restricted, login, fetched)
+        for identifier, user_id, fetched, total, restricted, login in rows
+        if reuse_snapshot or (now >= fetched and (fetched >= closed_at if ttl is None else now - fetched < ttl))
+    }
+    return {
+        profile["login"].lower(): cast(
+            ObservedUser,
+            {
+                **profile,
+                "login": by_id[profile["id"]][3]
+                if by_id[profile["id"]][4] > profile.get("_profileFetchedAt", now)
+                else profile["login"],
+                "_observation": by_id[profile["id"]][0],
+                "totalContributions": by_id[profile["id"]][1],
+                "restrictedContributionsCount": by_id[profile["id"]][2],
+            },
+        )
+        for profile in profiles
+        if profile["id"] in by_id
+    }
 
 
-def save_snapshot(metadata):
-    users = metadata['users']
-    extra = {k: v for k, v in metadata.items() if k not in ('from', 'to', 'generatedAt', 'users', 'missingUsers', 'unavailableUsers')}
+def save_snapshot(metadata: SnapshotMetadata) -> None:
+    users = metadata["users"]
+    extra = {
+        key: value
+        for key, value in metadata.items()
+        if key not in ("from", "to", "generatedAt", "users", "missingUsers", "unavailableUsers")
+    }
     with closing(connect()) as connection, connection:
-        cursor = connection.execute('''INSERT INTO snapshots (period_from, period_to, generated_at, metadata)
+        cursor = connection.execute(
+            """INSERT INTO snapshots (period_from, period_to, generated_at, metadata)
             VALUES (?, ?, ?, ?) ON CONFLICT(period_from, period_to) DO UPDATE SET
-            generated_at=excluded.generated_at, metadata=excluded.metadata RETURNING id''',
-            (metadata['from'], metadata['to'], metadata['generatedAt'], json.dumps(extra, ensure_ascii=False)))
-        snapshot = cursor.fetchone()[0]
-        connection.execute('DELETE FROM members WHERE snapshot_id=?', (snapshot,))
+            generated_at=excluded.generated_at, metadata=excluded.metadata RETURNING id""",
+            (metadata["from"], metadata["to"], metadata["generatedAt"], json.dumps(extra, ensure_ascii=False)),
+        )
+        snapshot_row = cast(tuple[int] | None, cursor.fetchone())
+        if snapshot_row is None:
+            raise RuntimeError("SQLite did not return the saved snapshot ID")
+        snapshot = snapshot_row[0]
+        connection.execute("DELETE FROM members WHERE snapshot_id=?", (snapshot,))
         for position, user in enumerate(users):
-            observation = connection.execute('''SELECT total, restricted, period_from, period_to, user_id
-                FROM observations WHERE id=?''', (user['_observation'],)).fetchone()
-            if observation is None or observation[:4] != (user['totalContributions'], user['restrictedContributionsCount'], metadata['from'], metadata['to']):
-                raise ValueError('Snapshot does not match its saved observation')
-            if user['id'] != observation[4]:
-                raise ValueError('Snapshot identity does not match its saved observation')
-            profile = {k: v for k, v in user.items() if k not in ('_observation', '_profileFetchedAt', 'totalContributions', 'restrictedContributionsCount', 'login', 'id')}
-            connection.execute('INSERT INTO members VALUES (?, ?, ?, ?, ?, ?)',
-                               (snapshot, position, user['login'], json.dumps(profile, ensure_ascii=False), user['_observation'], 'ok'))
-        unavailable = metadata.get('unavailableUsers', [])
+            if "_observation" not in user:
+                raise ValueError("Snapshot user is missing its saved observation ID")
+            observation = cast(
+                SnapshotObservationRow | None,
+                connection.execute(
+                    """SELECT total, restricted, period_from, period_to, user_id
+                    FROM observations WHERE id=?""",
+                    (user["_observation"],),
+                ).fetchone(),
+            )
+            if observation is None or observation[:4] != (
+                user["totalContributions"],
+                user["restrictedContributionsCount"],
+                metadata["from"],
+                metadata["to"],
+            ):
+                raise ValueError("Snapshot does not match its saved observation")
+            if user["id"] != observation[4]:
+                raise ValueError("Snapshot identity does not match its saved observation")
+            profile = {
+                key: value
+                for key, value in user.items()
+                if key
+                not in (
+                    "_observation",
+                    "_profileFetchedAt",
+                    "totalContributions",
+                    "restrictedContributionsCount",
+                    "login",
+                    "id",
+                )
+            }
+            connection.execute(
+                "INSERT INTO members VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    snapshot,
+                    position,
+                    user["login"],
+                    json.dumps(profile, ensure_ascii=False),
+                    user["_observation"],
+                    "ok",
+                ),
+            )
+        unavailable = metadata.get("unavailableUsers", [])
         for position, user in enumerate(unavailable, len(users)):
-            profile = {k: v for k, v in user.items() if k not in ('login', '_profileFetchedAt')}
-            connection.execute('INSERT INTO members VALUES (?, ?, ?, ?, NULL, ?)',
-                               (snapshot, position, user['login'], json.dumps(profile, ensure_ascii=False), 'unavailable'))
-        connection.execute('''DELETE FROM observations WHERE id NOT IN (
+            profile = {key: value for key, value in user.items() if key not in ("login", "_profileFetchedAt")}
+            connection.execute(
+                "INSERT INTO members VALUES (?, ?, ?, ?, NULL, ?)",
+                (snapshot, position, user["login"], json.dumps(profile, ensure_ascii=False), "unavailable"),
+            )
+        connection.execute("""DELETE FROM observations WHERE id NOT IN (
             SELECT MAX(id) FROM observations GROUP BY scope, user_id, period_from, period_to
-            UNION SELECT observation_id FROM members WHERE observation_id IS NOT NULL)''')
+            UNION SELECT observation_id FROM members WHERE observation_id IS NOT NULL)""")
 
 
-def load_snapshots(period=None):
+def load_snapshots(period: Period | None = None) -> list[SnapshotMetadata]:
     # One read transaction keeps metadata and members from the same committed generation.
     with closing(connect()) as connection, connection:
-        connection.execute('BEGIN')
-        result = []
-        query, parameters = 'SELECT * FROM snapshots', ()
+        connection.execute("BEGIN")
+        result: list[SnapshotMetadata] = []
+        query, parameters = "SELECT * FROM snapshots", ()
         if period is not None:
-            query += ' WHERE period_from=? AND period_to=?'
-            parameters = (period['from'], period['to'])
-        query += ' ORDER BY period_from, period_to'
-        for identifier, start, end, generated, extra in connection.execute(query, parameters):
-            users, missing, unavailable = [], [], []
+            query += " WHERE period_from=? AND period_to=?"
+            parameters = (period["from"], period["to"])
+        query += " ORDER BY period_from, period_to"
+        snapshots = cast(list[tuple[int, str, str, str, str]], connection.execute(query, parameters).fetchall())
+        for identifier, start, end, generated, extra in snapshots:
+            users: list[RankingUser] = []
+            missing: list[str] = []
+            unavailable: list[UnavailableUser] = []
             provisional = False
-            closed_at = (datetime.datetime.fromisoformat(end) + datetime.timedelta(days=1)).timestamp()
-            for login, profile, status, total, restricted, user_id, fetched_at in connection.execute('''
+            closed_at = (datetime.fromisoformat(end) + timedelta(days=1)).timestamp()
+            member_rows = cast(
+                list[MemberRow],
+                connection.execute(
+                    """
                 SELECT m.login, m.profile, m.status, o.total, o.restricted, o.user_id, o.fetched_at
                 FROM members m LEFT JOIN observations o ON o.id=m.observation_id
-                WHERE m.snapshot_id=? ORDER BY m.position''', (identifier,)):
-                if status == 'unavailable':
+                WHERE m.snapshot_id=? ORDER BY m.position""",
+                    (identifier,),
+                ).fetchall(),
+            )
+            for login, profile_json, status, total, restricted, user_id, fetched_at in member_rows:
+                profile = cast(dict[str, object], json.loads(profile_json))
+                if status == "unavailable":
                     missing.append(login)
-                    unavailable.append({'login': login, **json.loads(profile)})
+                    unavailable.append(cast(UnavailableUser, {"login": login, **profile}))
                 else:
+                    if total is None or restricted is None or user_id is None or fetched_at is None:
+                        raise ValueError("Saved member is missing its observation")
                     provisional |= fetched_at < closed_at
-                    users.append({'login': login, 'id': user_id, **json.loads(profile), 'totalContributions': total, 'restrictedContributionsCount': restricted})
-            metadata = {**json.loads(extra), 'from': start, 'to': end, 'generatedAt': generated,
-                        'users': users, 'countsProvisional': provisional}
+                    users.append(
+                        cast(
+                            RankingUser,
+                            {
+                                "login": login,
+                                "id": user_id,
+                                **profile,
+                                "totalContributions": total,
+                                "restrictedContributionsCount": restricted,
+                            },
+                        )
+                    )
+            metadata = cast(
+                SnapshotMetadata,
+                {
+                    **cast(dict[str, object], json.loads(extra)),
+                    "from": start,
+                    "to": end,
+                    "generatedAt": generated,
+                    "users": users,
+                    "countsProvisional": provisional,
+                },
+            )
             if missing:
-                metadata['missingUsers'] = missing
+                metadata["missingUsers"] = missing
             if unavailable:
-                metadata['unavailableUsers'] = unavailable
+                metadata["unavailableUsers"] = unavailable
             result.append(metadata)
         return result
