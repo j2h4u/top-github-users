@@ -1,0 +1,59 @@
+[project]
+name = "top-github-users"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "basedpyright==1.40.2",
+    "ruff==0.17.0",
+    "vulture==2.16",
+]
+
+[tool.ruff]
+src = ["scripts"]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+explicit-preview-rules = true
+allowed-confusables = ["с", "о", "а", "е", "г", "б", "В", "р", "Н", "С", "у", "З", "×", "–", "−"]
+select = [
+    "E4", "E7", "E9", "F", "I", "B", "BLE", "UP", "C4", "PIE", "RET",
+    "ISC", "RSE", "FLY", "FURB", "RUF", "PERF", "SIM", "PTH", "DTZ",
+    "PGH", "PLE", "LOG", "G", "N818", "ARG", "C90", "PLR09", "PLR17",
+    "PLR2004",
+]
+ignore = ["ISC001"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/test_*.py" = ["DTZ", "PERF401", "PLR2004"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.basedpyright]
+include = ["scripts"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+reportAny = "error"
+reportExplicitAny = "error"
+reportUnknownVariableType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownMemberType = "none"
+reportUnknownParameterType = "none"
+reportUnknownLambdaType = "none"
+reportMissingParameterType = "error"
+reportMissingTypeArgument = "none"
+reportUnannotatedClassAttribute = "none"
+reportUnusedCallResult = "none"
+reportImplicitStringConcatenation = "none"
+reportPrivateUsage = "none"
+
+[tool.vulture]
+paths = ["scripts"]
+min_confidence = 80

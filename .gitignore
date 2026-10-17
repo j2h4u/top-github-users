@@ -1,2 +1,6 @@
 __pycache__/
 data/rankings.sqlite3*
+.venv/
+.ruff_cache/
+.basedpyright/
+.uv/

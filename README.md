@@ -116,12 +116,15 @@ To restore, stop collection and report generation, restore the database at
 
 ## Checks
 
-GitHub Actions runs tests. Collection runs locally so the private database stays
-available between runs. To run the checks locally:
+GitHub Actions runs the same unit, lint, format, type and dead-code checks as
+`just check`. With `uv` and `just` installed, sync the pinned QA tools and run:
 
 ```bash
-python3 -m unittest discover -s scripts -p 'test_*.py'
+just sync
+just check
 ```
+
+Collection runs locally so the private database stays available between runs.
 
 ## Sources
 
