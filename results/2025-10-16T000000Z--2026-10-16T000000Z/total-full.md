@@ -1,13 +1,19 @@
-# Kazakhstan contribution rankings
+---
+period_start: "2025-10-16T00:00:00Z"
+period_end: "2026-10-16T00:00:00Z"
+snapshot_completed: "2026-10-16T21:09:48.383511+00:00"
+accounts_fetched: 17878
+selection_mode: "full-location-search"
+observer_policy: "authenticated-viewer"
+timezone: "UTC"
+dates_inclusive: true
+counts_provisional: true
+counts_timing: "individual acquisition times"
+unavailable_accounts: 0
+snapshot_complete: true
+---
 
-Period: `2025-10-16T00:00:00Z` → `2026-10-16T00:00:00Z`.
-Snapshot completed: `2026-10-16T21:09:48.383511+00:00`.
-Accounts fetched: **17878**.
-Selection mode: `full-location-search`.
-Observer policy: `authenticated-viewer`.
-Both UTC dates are included. Some counts were collected before the final UTC day ended and may be incomplete.
-Counts reflect their individual acquisition times.
-Unavailable accounts: 0; snapshot complete.
+# Kazakhstan contribution rankings
 
 Equal contribution counts share a rank. Counts are contributions, not only commits.
 Coverage is configured GitHub location search, not a census of Kazakhstan.

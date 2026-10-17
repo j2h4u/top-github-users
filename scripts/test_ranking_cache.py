@@ -1,5 +1,6 @@
 import datetime
 from contextlib import closing
+from dataclasses import fields, replace
 import json
 import os
 import sqlite3
@@ -243,7 +244,7 @@ class StoreTest(unittest.TestCase):
              patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')), patch('builtins.print'):
             ranking.main()
         report = ranking.result_directory(PERIOD) / 'README.md'
-        self.assertIn('Some counts were collected before', report.read_text())
+        self.assertIn('counts_provisional: true', report.read_text())
         with patch.object(store.time, 'time', return_value=closed_at), \
              patch.dict(os.environ, {'REFRESH_CACHE': 'true'}), \
              patch.object(ranking, 'collect_profiles', return_value=([alice, bob], [])), \
@@ -251,7 +252,7 @@ class StoreTest(unittest.TestCase):
              patch('builtins.print'):
             ranking.collect_ranking(PERIOD)
         self.assertFalse(store.load_snapshots()[0]['countsProvisional'])
-        self.assertNotIn('Some counts were collected before', report.read_text())
+        self.assertIn('counts_provisional: false', report.read_text())
 
     def test_refresh_preserves_ready_snapshot_then_removes_old_observation(self):
         alice = profile()
@@ -290,13 +291,13 @@ class StoreTest(unittest.TestCase):
             {'login': 'B', 'followers': 0, 'totalContributions': 25, 'restrictedContributionsCount': 20},
             {'login': 'C', 'followers': 2, 'totalContributions': 10, 'restrictedContributionsCount': 1}]}
         path = ranking.render_rankings(metadata)
-        self.assertNotIn('Some counts were collected before', path.read_text())
+        self.assertIn('counts_provisional: false', path.read_text())
         metadata['generatedAt'] = '2026-09-17T12:00:00Z'
         metadata['countsProvisional'] = True
         path = ranking.render_rankings(metadata)
         old = path.read_bytes()
         text = old.decode()
-        self.assertIn('Some counts were collected before', text)
+        self.assertIn('counts_provisional: true', text)
         visible, total = text.split('## Top 100 — Total')
         self.assertIn('## Top 100 — Visible to acquisition viewer', visible)
         self.assertNotIn('## Public', text)
@@ -341,6 +342,37 @@ class StoreTest(unittest.TestCase):
             self.assertNotIn('[Zero]', full)
         self.assertNotIn('[RestrictedOnly]', (directory / 'visible-full.md').read_text())
         self.assertIn('[RestrictedOnly]', (directory / 'total-full.md').read_text())
+
+    def test_frontmatter_schema_round_trips_metadata_and_rejects_wrong_types(self):
+        metadata = self.snapshot([{**profile(), 'totalContributions': 12, 'restrictedContributionsCount': 3}],
+                                 countsProvisional=True, missingUsers=['Bob'])
+        metadata['selectionMode'] = 'full-location-search: "Қазақстан"\nsecond line'
+        path = ranking.render_rankings(metadata)
+        headers = []
+        for filename in ('README.md', 'visible-full.md', 'total-full.md'):
+            prefix, header, body = (path.parent / filename).read_text().split('---\n', 2)
+            self.assertEqual(prefix, '')
+            values = {key: json.loads(value) for key, value in
+                      (line.split(': ', 1) for line in header.splitlines())}
+            self.assertEqual(set(values), {field.name for field in fields(ranking.ReportFrontmatter)})
+            self.assertEqual(values, {
+                'period_start': PERIOD['from'], 'period_end': PERIOD['to'],
+                'snapshot_completed': metadata['generatedAt'], 'accounts_fetched': 1,
+                'selection_mode': metadata['selectionMode'], 'observer_policy': 'authenticated-viewer',
+                'timezone': 'UTC', 'dates_inclusive': True, 'counts_provisional': True,
+                'counts_timing': 'individual acquisition times', 'unavailable_accounts': 1,
+                'snapshot_complete': False})
+            self.assertTrue(body.startswith('\n# Kazakhstan contribution rankings'))
+            self.assertNotIn('Snapshot completed:', body)
+            self.assertNotIn('Selection mode:', body)
+            headers.append(header)
+        self.assertEqual(len(set(headers)), 1)
+        parameters = ranking.ReportFrontmatter(**values)
+        for invalid in ({'accounts_fetched': True}, {'dates_inclusive': 'true'}, {'snapshot_completed': None}):
+            with self.assertRaises(TypeError):
+                replace(parameters, **invalid).to_lines()
+        with self.assertRaises(ValueError):
+            replace(parameters, unavailable_accounts=-1).to_lines()
 
     def test_interrupted_publication_keeps_summary_and_reprojection_recovers(self):
         metadata = {**self.snapshot([]), 'countsProvisional': False, 'users': [
@@ -462,7 +494,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(saved['users']), 40)
         self.assertEqual(saved['missingUsers'], ['u0'])
         report = (ranking.result_directory(saved) / 'README.md').read_text()
-        self.assertIn('snapshot incomplete', report)
+        self.assertIn('snapshot_complete: false', report)
 
 
 if __name__ == '__main__':

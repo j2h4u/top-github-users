@@ -39,8 +39,8 @@ To expand location coverage for an existing period without updating its saved
 counts, add `--expand` to the collection command. Existing snapshot counts are
 retained regardless of age; new accounts are fetched normally. Omit `--expand`
 when you want the normal freshness policy.
-Reports retain the incomplete-day warning until all used counts were acquired
-after the final UTC day ended, even when the report is rebuilt later.
+Reports retain `counts_provisional: true` in their frontmatter until all used
+counts were acquired after the final UTC day ended, even when rebuilt later.
 
 All searches use `type:user` and split by followers/account creation dates to
 get past GitHub's 1,000-result cap. There is no truncated selection mode or
@@ -74,6 +74,13 @@ Each period has three reports under `results/<from>--<to>/`: `README.md` shows
 the top 100 accounts in each ranking and links to `visible-full.md` and
 `total-full.md`. Full reports contain all accounts with a positive count in
 the respective metric and link back to the summary.
+
+Each report starts with YAML frontmatter for its period, snapshot completion time,
+account counts, selection/observer policies and completeness flags. Field names,
+types and order are defined by the shared
+[ReportFrontmatter schema](scripts/kazakhstan_ranking.py); generation checks field
+types and nonnegative counts. Dates and other strings are quoted, and flags are
+YAML booleans. Metadata is separate from the explanatory text and ranking tables.
 
 All three files are written and flushed before publication. Each file is replaced
 atomically, with the summary published last, after the snapshot commits. A failed

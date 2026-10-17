@@ -1,6 +1,7 @@
 """Contribution rankings for inclusive UTC calendar dates; standard library only."""
 import argparse
 from contextlib import closing
+from dataclasses import dataclass, fields
 import datetime
 import hashlib
 import fcntl
@@ -184,21 +185,46 @@ def contribution_count(user, metric):
 def result_directory(period):
     return Path('results') / (period['from'] + '--' + period['to']).replace(':', '')
 
+
+@dataclass(frozen=True)
+class ReportFrontmatter:
+    period_start: str
+    period_end: str
+    snapshot_completed: str
+    accounts_fetched: int
+    selection_mode: str
+    observer_policy: str
+    timezone: str
+    dates_inclusive: bool
+    counts_provisional: bool
+    counts_timing: str
+    unavailable_accounts: int
+    snapshot_complete: bool
+
+    def to_lines(self) -> list[str]:
+        lines = ['---']
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if type(value) is not field.type:
+                raise TypeError(f'Invalid frontmatter field {field.name}: expected {field.type.__name__}')
+            if field.type is int and value < 0:
+                raise ValueError(f'Invalid frontmatter field {field.name}: expected a nonnegative count')
+            # JSON scalars are valid YAML and safely quote timestamps and special characters.
+            lines.append(f'{field.name}: {json.dumps(value, ensure_ascii=False)}')
+        return [*lines, '---', '']
+
+
 def render_rankings(metadata):
     for user in metadata['users']:
         store.validate_counts(user['totalContributions'], user['restrictedContributionsCount'])
     label = 'Visible to acquisition viewer'
-    lines = ['# Kazakhstan contribution rankings', '',
-        f'Period: `{metadata["from"]}` → `{metadata["to"]}`.',
-        f'Snapshot completed: `{metadata["generatedAt"]}`.',
-        f'Accounts fetched: **{len(metadata["users"])}**.',
-        f'Selection mode: `{metadata["selectionMode"]}`.',
-        f'Observer policy: `{metadata["observerPolicy"]}`.',
-        'Both UTC dates are included.' + (' Some counts were collected before the final UTC day ended and may be incomplete.'
-                                        if metadata['countsProvisional'] else ''),
-        'Counts reflect their individual acquisition times.',
-        f'Unavailable accounts: {len(metadata.get("missingUsers", []))}; snapshot ' +
-            ('incomplete.' if metadata.get('missingUsers') else 'complete.'), '',
+    parameters = ReportFrontmatter(
+        period_start=metadata['from'], period_end=metadata['to'], snapshot_completed=metadata['generatedAt'],
+        accounts_fetched=len(metadata['users']), selection_mode=metadata['selectionMode'],
+        observer_policy=metadata['observerPolicy'], timezone='UTC', dates_inclusive=True,
+        counts_provisional=metadata['countsProvisional'], counts_timing='individual acquisition times',
+        unavailable_accounts=len(metadata.get('missingUsers', [])), snapshot_complete=not metadata.get('missingUsers'))
+    lines = [*parameters.to_lines(), '# Kazakhstan contribution rankings', '',
         'Equal contribution counts share a rank. Counts are contributions, not only commits.',
         'Coverage is configured GitHub location search, not a census of Kazakhstan.',
         'The first metric is total minus restricted-detail counts. With an unrestricted or unknown observer, it may include private activity visible to that observer.',
