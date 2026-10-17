@@ -1,4 +1,5 @@
 import datetime
+import io
 from contextlib import closing
 from dataclasses import fields, replace
 import json
@@ -30,7 +31,7 @@ class StoreTest(unittest.TestCase):
         self.previous = Path.cwd()
         self.directory = tempfile.TemporaryDirectory()
         os.chdir(self.directory.name)
-        self.environment = patch.dict(os.environ, {'GH_TOKEN': 'test-only', 'REFRESH_CACHE': 'false'})
+        self.environment = patch.dict(os.environ, {'GH_TOKEN': 'test-only'})
         self.environment.start()
         self.addCleanup(self.environment.stop)
         self.addCleanup(self.directory.cleanup)
@@ -52,7 +53,66 @@ class StoreTest(unittest.TestCase):
         for start, end in [('2026-10-16', '2025-10-16'), ('2024-01-01', '2026-01-01'), ('bad', '2026-10-16'), ('2026-10-16', '2099-01-01')]:
             with patch('sys.stderr'), self.assertRaises(SystemExit):
                 ranking.parse_period(['--from', start, '--to', end])
-        self.assertIsNone(ranking.parse_period(['--project']))
+        self.assertIsNone(ranking.parse_period(['--rebuild-reports']))
+
+    def test_cli_errors_and_help_do_not_touch_database_or_github(self):
+        dates = ['--from', PERIOD['from'][:10], '--to', PERIOD['to'][:10]]
+        cases = [
+            (dates + ['--refresh', '--keep-saved-counts'], 'not allowed with argument'),
+            (['--rebuild-reports', '--refresh'], 'not allowed with argument'),
+            (['--rebuild-reports', '--keep-saved-counts'], 'not allowed with argument'),
+            (['--rebuild-reports', *dates], 'omit --from and --to'),
+            (['--from', 'oops', '--to', PERIOD['to'][:10]], 'use YYYY-MM-DD'),
+            ([], '--from and --to are required'),
+            (['--project'], 'unrecognized arguments'),
+            (['--expand'], 'unrecognized arguments'),
+        ]
+        with patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')):
+            for arguments, message in cases:
+                with self.subTest(arguments=arguments), patch('sys.argv', ['ranking', *arguments]), \
+                     patch('sys.stderr', new_callable=io.StringIO) as errors, self.assertRaises(SystemExit) as error:
+                    ranking.main()
+                self.assertEqual(error.exception.code, 2)
+                self.assertIn(message, errors.getvalue())
+            for token in ('', '   '):
+                with patch.dict(os.environ, {'GH_TOKEN': token}), patch('sys.argv', ['ranking', *dates]), \
+                     patch('sys.stderr', new_callable=io.StringIO) as errors, self.assertRaises(SystemExit):
+                    ranking.main()
+                self.assertIn('Set GH_TOKEN', errors.getvalue())
+            with patch.dict(os.environ, {}, clear=True), patch('sys.stdout', new_callable=io.StringIO) as output, \
+                 self.assertRaises(SystemExit) as error:
+                ranking.parse_period(['--help'])
+            self.assertEqual(error.exception.code, 0)
+            for text in ('YYYY-MM-DD', '--rebuild-reports', '--keep-saved-counts', '--refresh', 'Examples', 'GH_TOKEN'):
+                self.assertIn(text, output.getvalue())
+        self.assertFalse(store.DATABASE.exists())
+
+    def test_refresh_cli_bypasses_both_caches_without_leaking_flags_to_github(self):
+        alice = profile()
+        with patch.object(ranking, 'fetch_api', return_value={'cached': True}):
+            ranking.api('search', {})
+        with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):
+            ranking.fetch_users([alice], PERIOD)
+
+        def collect(period, expand):
+            self.assertEqual(period, PERIOD)
+            self.assertFalse(expand)
+            with patch.object(ranking, 'fetch_api', return_value={'fresh': True}) as fetching:
+                self.assertEqual(ranking.api('search', {})['fresh'], True)
+                fetching.assert_called_once()
+            with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice, 20, 4)}) as fetching:
+                self.assertEqual(ranking.fetch_users([alice], period)['alice']['totalContributions'], 20)
+                fetching.assert_called_once()
+
+        self.addCleanup(setattr, ranking, 'REFRESH_CACHE', False)
+        with patch('sys.argv', ['ranking', '--from', PERIOD['from'], '--to', PERIOD['to'], '--refresh']), \
+             patch.object(ranking, 'collect_ranking', side_effect=collect) as collecting:
+            ranking.main()
+            collecting.assert_called_once()
+        with patch('sys.argv', ['ranking', '--from', PERIOD['from'], '--to', PERIOD['to']]), \
+             patch.object(ranking, 'collect_ranking'):
+            ranking.main()
+        self.assertFalse(ranking.REFRESH_CACHE)
 
     def test_stable_identity_reuse_rename_and_login_reassignment(self):
         alice = profile()
@@ -70,7 +130,7 @@ class StoreTest(unittest.TestCase):
             with patch.dict(os.environ, {'GH_TOKEN': 'other-credential'}):
                 ranking.fetch_users([replacement], PERIOD)
             self.assertEqual(fetch.call_count, 3)
-            with patch.dict(os.environ, {'REFRESH_CACHE': 'true'}):
+            with patch.object(ranking, 'REFRESH_CACHE', True):
                 ranking.fetch_users([replacement], PERIOD)
             self.assertEqual(fetch.call_count, 4)
 
@@ -167,7 +227,7 @@ class StoreTest(unittest.TestCase):
                 return {f'u{i}': None if unavailable and p['id'] == 'ID-20' else
                         {**api_user(p), 'login': 'Same' if p['id'] in ('ID-0', 'ID-20') else p['login']}
                         for i, p in enumerate(batch)}
-            with patch.dict(os.environ, {'REFRESH_CACHE': 'true'}), \
+            with patch.object(ranking, 'REFRESH_CACHE', True), \
                  patch.object(ranking, 'collect_profiles', return_value=(profiles, [])), \
                  patch.object(ranking, 'fetch_api', side_effect=fetch), patch('builtins.print'):
                 with self.assertRaisesRegex(RuntimeError, 'names changed during collection'):
@@ -240,13 +300,13 @@ class StoreTest(unittest.TestCase):
         with closing(store.connect()) as connection:
             self.assertEqual(connection.execute('SELECT id,total,restricted,fetched_at FROM observations WHERE user_id=?',
                                                 (alice['id'],)).fetchone(), before)
-        with patch.dict(os.environ, {}, clear=True), patch('sys.argv', ['ranking', '--project']), \
+        with patch.dict(os.environ, {}, clear=True), patch('sys.argv', ['ranking', '--rebuild-reports']), \
              patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')), patch('builtins.print'):
             ranking.main()
         report = ranking.result_directory(PERIOD) / 'README.md'
         self.assertIn('Last day may be incomplete: "Yes"', report.read_text())
         with patch.object(store.time, 'time', return_value=closed_at), \
-             patch.dict(os.environ, {'REFRESH_CACHE': 'true'}), \
+             patch.object(ranking, 'REFRESH_CACHE', True), \
              patch.object(ranking, 'collect_profiles', return_value=([alice, bob], [])), \
              patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice, 14, 4), 'u1': api_user(bob, 20, 4)}), \
              patch('builtins.print'):
@@ -259,7 +319,7 @@ class StoreTest(unittest.TestCase):
         with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):
             original = ranking.fetch_users([alice], PERIOD)
         store.save_snapshot(self.snapshot(list(original.values())))
-        with patch.dict(os.environ, {'REFRESH_CACHE': 'true'}):
+        with patch.object(ranking, 'REFRESH_CACHE', True):
             with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice, 20, 4)}):
                 refreshed = ranking.fetch_users([alice], PERIOD)
         self.assertEqual(store.load_snapshots()[0]['users'][0]['totalContributions'], 12)
@@ -435,7 +495,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.load_snapshots({**PERIOD, 'from': '2025-09-19T00:00:00Z'}), [])
         path = ranking.render_rankings(selected[0])
         before = path.read_bytes()
-        with patch.dict(os.environ, {}, clear=True), patch('sys.argv', ['ranking', '--project']), \
+        with patch.dict(os.environ, {}, clear=True), patch('sys.argv', ['ranking', '--rebuild-reports']), \
              patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')), patch('builtins.print'):
             ranking.main()
         self.assertEqual(path.read_bytes(), before)
@@ -450,7 +510,7 @@ class StoreTest(unittest.TestCase):
         with patch.object(ranking, 'fetch_api', return_value={'u0': api_user(alice)}):
             users = ranking.fetch_users([alice], PERIOD)
         store.save_snapshot(self.snapshot(list(users.values())))
-        with patch('sys.argv', ['ranking', '--project']), patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')):
+        with patch('sys.argv', ['ranking', '--rebuild-reports']), patch.object(ranking, 'fetch_api', side_effect=AssertionError('offline')):
             ranking.main()
             with store.DATABASE.open('rb') as lock:
                 ranking.fcntl.flock(lock, ranking.fcntl.LOCK_EX | ranking.fcntl.LOCK_NB)
@@ -476,7 +536,7 @@ class StoreTest(unittest.TestCase):
         saved = {u['login']: u for u in store.load_snapshots()[0]['users']}
         self.assertEqual(saved['Renamed']['totalContributions'], 12)
         self.assertEqual(saved['Bob']['totalContributions'], 20)
-        expanded = ranking.parse_period(['--from', PERIOD['from'], '--to', PERIOD['to'], '--expand'])
+        expanded = ranking.parse_period(['--from', PERIOD['from'], '--to', PERIOD['to'], '--keep-saved-counts'])
         self.assertTrue(expanded.pop('_expand'))
         self.assertEqual(expanded, PERIOD)
 

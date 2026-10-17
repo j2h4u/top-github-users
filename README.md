@@ -27,33 +27,34 @@ GH_TOKEN="$(gh auth token)" python3 scripts/kazakhstan_ranking.py \
   --from 2025-10-16 --to 2026-10-16
 ```
 
-Change the dates to collect another period. Existing reports for other periods
-remain available. Both dates are included, in UTC.
+Use `--help` for options and examples. Change the dates to collect another period.
+Existing reports for other periods remain available. Both dates are included, in UTC.
 
 ## Update or expand the results
 
 Run the collection command again to fetch missing or outdated counts. Completed
 batches are saved, so an interrupted run can continue.
 
-After changing the locations in [config.json](config.json), add `--expand` to
-keep the saved snapshot's counts and collect counts for new participants:
+After changing the locations in [config.json](config.json), add `--keep-saved-counts` to
+keep the saved snapshot's counts and collect missing counts. The report uses
+the current location search; accounts that no longer match can disappear:
 
 ```bash
 GH_TOKEN="$(gh auth token)" python3 scripts/kazakhstan_ranking.py \
-  --from 2025-10-16 --to 2026-10-16 --expand
+  --from 2025-10-16 --to 2026-10-16 --keep-saved-counts
 ```
 
-To deliberately request fresh counts and search results, use `REFRESH_CACHE=true`:
+To deliberately request fresh counts and search results, add `--refresh`:
 
 ```bash
-REFRESH_CACHE=true GH_TOKEN="$(gh auth token)" python3 scripts/kazakhstan_ranking.py \
-  --from 2025-10-16 --to 2026-10-16
+GH_TOKEN="$(gh auth token)" python3 scripts/kazakhstan_ranking.py \
+  --from 2025-10-16 --to 2026-10-16 --refresh
 ```
 
 To rebuild all saved reports from the local database, without GitHub or a token:
 
 ```bash
-python3 scripts/kazakhstan_ranking.py --project
+python3 scripts/kazakhstan_ranking.py --rebuild-reports
 ```
 
 ## Read the rankings
@@ -94,7 +95,7 @@ because access to private activity can differ; tokens are never saved.
 
 Reports are prepared before publication and each file is replaced atomically,
 with the summary published last. Collection and report generation take an
-exclusive local lock. After an interrupted publication, run `--project` again.
+exclusive local lock. After an interrupted publication, run `--rebuild-reports` again.
 
 Use SQLite's backup API for a consistent backup while the database is open:
 
@@ -111,7 +112,7 @@ with closing(sqlite3.connect('data/rankings.sqlite3')) as source:
 ```
 
 To restore, stop collection and report generation, restore the database at
-`data/rankings.sqlite3`, set its permissions to `0600`, then run `--project`.
+`data/rankings.sqlite3`, set its permissions to `0600`, then run `--rebuild-reports`.
 
 ## Checks
 

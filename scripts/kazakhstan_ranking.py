@@ -23,6 +23,7 @@ contributionsCollection(from: $from, to: $to) {
   restrictedContributionsCount
 }'''
 NEXT_REQUEST_AT = 0.0
+REFRESH_CACHE = False
 
 def cache_key(key):
     # Separate credentials can see different restricted contribution counts.
@@ -36,7 +37,7 @@ def contribution_ttl(period):
     return None if historical else 3600
 
 def read_cache(key, ttl):
-    if os.environ.get('REFRESH_CACHE', 'false').lower() != 'true':
+    if not REFRESH_CACHE:
         with closing(store.connect()) as connection:
             row = connection.execute('SELECT fetched_at, data FROM responses WHERE key = ?', (key,)).fetchone()
         if row is not None and (ttl is None or 0 <= time.time() - row[0] < ttl):
@@ -65,7 +66,7 @@ def credential_scope():
 
 def cached_users(profiles, period, reuse_snapshot=False):
     return store.cached_observations(credential_scope(), profiles, period, contribution_ttl(period),
-                                    os.environ.get('REFRESH_CACHE', 'false').lower() == 'true', reuse_snapshot)
+                                    REFRESH_CACHE, reuse_snapshot)
 
 def fetch_users(profiles, period):
     users = cached_users(profiles, period)
@@ -272,20 +273,42 @@ def render_rankings(metadata):
     return directory / 'README.md'
 
 def parse_period(arguments=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--from', dest='start', help='First included UTC calendar date')
-    parser.add_argument('--to', dest='end', help='Last included UTC calendar date; at most one year after start')
-    parser.add_argument('--expand', action='store_true', help='Expand membership, retaining existing snapshot counts regardless of age')
-    parser.add_argument('--project', action='store_true', help='Rebuild all reports from SQLite, without GitHub')
+    parser = argparse.ArgumentParser(
+        description='Collect Kazakhstan GitHub contribution rankings and create readable reports.\n'
+                    'Saved counts are reused automatically. Both dates are included, in UTC.\n'
+                    'The end date must be within one calendar year of the start and not in the future.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''Examples (run from the repository root):
+  Collect or resume a period:
+    GH_TOKEN="$(gh auth token)" python3 scripts/kazakhstan_ranking.py --from 2025-10-16 --to 2026-10-16
+  Keep saved counts after changing locations in config.json:
+    GH_TOKEN="$(gh auth token)" python3 scripts/kazakhstan_ranking.py --from 2025-10-16 --to 2026-10-16 --keep-saved-counts
+  Request fresh search results and counts: add --refresh to a collection command.
+  Rebuild all saved reports without GitHub or a token:
+    python3 scripts/kazakhstan_ranking.py --rebuild-reports
+
+Authentication: set GH_TOKEN to a GitHub token, for example using gh auth token.
+Only accounts matching the current location search appear in a new report.''')
+    parser.add_argument('--from', dest='start', metavar='YYYY-MM-DD', help='First included UTC date')
+    parser.add_argument('--to', dest='end', metavar='YYYY-MM-DD', help='Last included UTC date')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--keep-saved-counts', action='store_true',
+                       help='Keep saved counts regardless of age; fetch only missing counts for users matching current locations')
+    modes.add_argument('--refresh', action='store_true', help='Request fresh location search results and contribution counts')
+    modes.add_argument('--rebuild-reports', action='store_true',
+                       help='Recreate all Markdown reports from the local database; no GitHub access or token needed')
     args = parser.parse_args(arguments)
-    if args.project:
-        if args.start or args.end or args.expand:
-            parser.error('--project takes no period: it projects all stored snapshots')
+    if args.rebuild_reports:
+        if args.start or args.end:
+            parser.error('--rebuild-reports rebuilds all saved periods; omit --from and --to')
         return None
     if not args.start or not args.end:
         parser.error('--from and --to are required for collection')
     try:
         start, end = [datetime.datetime.fromisoformat(value) for value in (args.start, args.end)]
+    except ValueError:
+        parser.error('Invalid date: use YYYY-MM-DD, for example --from 2025-10-16 --to 2026-10-16')
+    try:
         start, end = [value.replace(tzinfo=datetime.timezone.utc) if value.tzinfo is None
                       else value.astimezone(datetime.timezone.utc) for value in (start, end)]
         start, end = [value.replace(hour=0, minute=0, second=0, microsecond=0) for value in (start, end)]
@@ -296,9 +319,13 @@ def parse_period(arguments=None):
             raise ValueError('Period end must not be in the future')
     except (ValueError, OverflowError) as error:
         parser.error(str(error))
+    if not os.environ.get('GH_TOKEN', '').strip():
+        parser.error('GitHub authentication is required. Set GH_TOKEN, for example: GH_TOKEN="$(gh auth token)"')
     period = {key: value.isoformat().replace('+00:00', 'Z') for key, value in [('from', start), ('to', end)]}
-    if args.expand:
+    if args.keep_saved_counts:
         period['_expand'] = True
+    if args.refresh:
+        period['_refresh'] = True
     return period
 
 def collect_profiles():
@@ -404,7 +431,9 @@ def collect_ranking(period, expand=False):
     print(f'Completed in {time.monotonic() - started:.1f}s; report: {path}', flush=True)
 
 def main():
+    global REFRESH_CACHE
     period = parse_period()
+    REFRESH_CACHE = period.pop('_refresh', False) if period is not None else False
     with closing(store.connect()):
         pass
     # Serialize collection and projection without holding a database transaction during HTTP.
