@@ -188,8 +188,7 @@ def result_directory(period):
 
 @dataclass(frozen=True)
 class ReportFrontmatter:
-    period_start: str = field(metadata={'label': 'Period start'})
-    period_end: str = field(metadata={'label': 'Period end'})
+    period: str = field(metadata={'label': 'Period'})
     snapshot_completed: str = field(metadata={'label': 'Collection completed'})
     accounts_fetched: int = field(metadata={'label': 'Accounts included'})
     counts_provisional: bool = field(metadata={'label': 'Last day may be incomplete'})
@@ -215,8 +214,7 @@ def render_rankings(metadata):
         store.validate_counts(user['totalContributions'], user['restrictedContributionsCount'])
     label = 'Visible to acquisition viewer'
     parameters = ReportFrontmatter(
-        period_start=datetime.datetime.fromisoformat(metadata['from']).date().isoformat(),
-        period_end=datetime.datetime.fromisoformat(metadata['to']).date().isoformat(),
+        period=' — '.join(datetime.datetime.fromisoformat(metadata[key]).date().isoformat() for key in ('from', 'to')),
         snapshot_completed=datetime.datetime.fromisoformat(metadata['generatedAt']).astimezone(
             datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
         accounts_fetched=len(metadata['users']), counts_provisional=metadata['countsProvisional'],

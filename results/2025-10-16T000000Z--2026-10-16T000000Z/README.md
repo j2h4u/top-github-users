@@ -1,6 +1,5 @@
 ---
-Period start: "2025-10-16"
-Period end: "2026-10-16"
+Period: "2025-10-16 — 2026-10-16"
 Collection completed: "2026-10-16 21:09:48 UTC"
 Accounts included: 17878
 Last day may be incomplete: "Yes"

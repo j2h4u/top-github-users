@@ -355,7 +355,7 @@ class StoreTest(unittest.TestCase):
                       (line.split(': ', 1) for line in header.splitlines())}
             self.assertEqual(set(values), {field.metadata["label"] for field in fields(ranking.ReportFrontmatter)})
             self.assertEqual(values, {
-                'Period start': PERIOD['from'][:10], 'Period end': PERIOD['to'][:10],
+                'Period': PERIOD['from'][:10] + ' — ' + PERIOD['to'][:10],
                 'Collection completed': datetime.datetime.fromisoformat(metadata['generatedAt']).astimezone(
                     datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'),
                 'Accounts included': 1, 'Last day may be incomplete': 'Yes', 'Accounts unavailable': 1})
@@ -369,7 +369,7 @@ class StoreTest(unittest.TestCase):
             field.name: True if field.type is bool else values[field.metadata['label']]
             for field in fields(ranking.ReportFrontmatter)})
         special = 'period: "Қазақстан"\nsecond line'
-        self.assertEqual(json.loads(replace(parameters, period_start=special).to_lines()[1].split(': ', 1)[1]), special)
+        self.assertEqual(json.loads(replace(parameters, period=special).to_lines()[1].split(': ', 1)[1]), special)
         for invalid in ({'accounts_fetched': True}, {'counts_provisional': 'true'}, {'snapshot_completed': None}):
             with self.assertRaises(TypeError):
                 replace(parameters, **invalid).to_lines()
